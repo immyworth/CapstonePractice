@@ -1001,9 +1001,9 @@ The model has improved in performance in terms accuracy, but the interaction ter
 
 # Simple model ROC plot
 roc_plot_simple <- ggplot() +
-  geom_line(aes(x = 1 - roc_curve_with_features$specificities, y = roc_curve_with_features$sensitivities), color = "blue") +
+  geom_line(aes(x = 1 - roc_curve_simple$specificities, y = roc_curve_simple$sensitivities), color = "blue") +
   geom_abline(linetype = "dashed", color = "gray") +
-  labs(title = paste("Simple Model ROC (AUC =", round(auc(roc_curve_with_features), 3), ")"), x = "1 - Specificity", y = "Sensitivity") +
+  labs(title = paste("Simple Model ROC (AUC =", round(auc(roc_curve_simple), 3), ")"), x = "1 - Specificity", y = "Sensitivity") +
   theme_minimal()
 
 # Model with terms ROC plot

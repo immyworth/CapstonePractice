@@ -27,15 +27,15 @@ The prior application data includes data on the previous applications for Home C
 
 knitr::opts_chunk$set(warning = FALSE)
 
-pacman::p_load(ggplot2, dplyr, skimr, caret, tidyverse, knitr, janitor, randomForest, gridExtra, corrplot)
+pacman::p_load(ggplot2, dplyr, skimr, caret, tidyverse, knitr, janitor, randomForest, gridExtra, corrplot, DMwR, pROC)
 
 app_train <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/application_train.csv")
 
 app_test <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/application_test.csv")
 
-prior_app <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/previous_application.csv")
+#prior_app <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/previous_application.csv")
 
-bureau <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/bureau.csv")
+#bureau <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/bureau.csv")
 
 dd <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/HomeCredit_columns_description.csv")
 ```
@@ -598,6 +598,7 @@ corrplot(correlations_subset, method = "color", type = "upper", tl.cex = 0.8, tl
 
 
 ```{r}
+
 # investigate Income 
 
 ggplot(app_train, aes(x = as.factor(TARGET), y = AMT_INCOME_TOTAL)) +
@@ -622,6 +623,7 @@ ggplot(app_train, aes(x = Age_in_Years, fill = as.factor(TARGET))) +
   geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
   labs(title = "Age Distribution by Loan Defaulting", x = "Age (Years)", y = "Count") +
   theme_minimal()
+
 ```
 
 
@@ -635,16 +637,10 @@ Family Size (CNT_FAM_MEMBERS)
 Age (Age_in_Years)
 
 
-The IQR rule for identifying outliers in a box plot states that a data point is an outlier if it is more than 1.5 times the interquartile range (IQR) above the third quartile (Q3) or below the first quartile (Q1):
-Low outliers: Below Q1 - 1.5 IQR
-High outliers: Above Q3 + 1.5 IQR 
-
-
-
 investigate super high earners
 ```{r}
 # Find the income cutoff for the top 1% earners
-top_1_percent_cutoff <- quantile(app_train$AMT_INCOME_TOTAL, 0.999, na.rm = TRUE)
+top_1_percent_cutoff <- quantile(app_train$AMT_INCOME_TOTAL, 0.99, na.rm = TRUE)
 
 cat("Top 1% Income Cutoff:", top_1_percent_cutoff)
 
@@ -655,6 +651,9 @@ top_1_percent <- app_train %>%
 
 # Print the top 1% income earners ordered by income
 print(top_1_percent)
+
+sum(app_train$AMT_INCOME_TOTAL > 3000000)
+
 
 ```
 
@@ -667,6 +666,15 @@ high_income_default <- top_1_percent %>%
   summarise(count = n())
 
 print(high_income_default)
+
+high_income_data <- app_train[app_train$AMT_INCOME_TOTAL > 2000000, ]
+
+table(high_income_data$TARGET)
+
+# make two million the cut off for removing outlines 
+app_train <- app_train[app_train$AMT_INCOME_TOTAL <= 2000000, ]
+
+
 ```
 given there are earners in the top 1 percent that do default it is worth keeping them in the dataset but we will drop the few crazy outliers that are skewing the data. 
 
@@ -800,9 +808,9 @@ print(missing_ext_source)
 # Optional: check how many rows have all three EXT_SOURCE variables missing
 cat("Number of rows where all EXT_SOURCE variables are missing:", nrow(missing_ext_source), "\n")
 
-app_train$has_external_source <- ifelse(!is.na(train_data$EXT_SOURCE_1)|
-                                         !is.na(train_data$EXT_SOURCE_2) | 
-                                         !is.na(train_data$EXT_SOURCE_3), 1, 0)
+app_train$has_external_source <- ifelse(!is.na(app_train$EXT_SOURCE_1)|
+                                         !is.na(app_train$EXT_SOURCE_2) | 
+                                         !is.na(app_train$EXT_SOURCE_3), 1, 0)
 
 
 ```
@@ -822,6 +830,7 @@ Do we assume the missing value for that person means they have no credit?
 
 
 ## Split Train data into test and train with 90% in test
+
 
 ```{r}
 set.seed(123)
@@ -850,14 +859,19 @@ head(train_data)
 ```
 
 
+## Simple Regression Model
+
 Do a simple logistic model with the train data
 
 ```{r}
 
-simple_model_1 <-glm(TARGET ~ 1, data = train_data, family = binomial)
+simple_model_1 <-glm(factor(TARGET) ~ 1, data = train_data, family = binomial)
+summary(simple_model_1)
 
 ```
+
 The coeff here is the log odds: so the probability would be calculated at: 0.07914653 
+
 
 ```{r}
 # Predict on the training set (the same probability for every observation)
@@ -874,10 +888,19 @@ head(predicted_class_simple)
 
 # Compute the confusion matrix
 confusionMatrix(factor(predicted_class_simple), factor(test_target))
+
+summary(predictions_simple)
+
+accuracy <- mean(predicted_class_simple == test_target)
+cat("Accuracy:", accuracy, "\n")
+
 ```
-This simple model is basically just the majoirty classifier:
+
+This simple model is basically just the majority classifier:
 
 lets look at its aUC ROC
+
+### ROC/AUC
 
 ```{r}
 # Compute ROC curve and AUC
@@ -890,11 +913,12 @@ cat("AUC for a simple glm:", auc_value_simple, "\n")
 ```
 
 
-## model with more features 
+## Model with more terms
 
 ```{r}
+
 model_with_features2 <- glm(
-  TARGET ~ AMT_INCOME_TOTAL + AMT_CREDIT + EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + CNT_CHILDREN + DAYS_EMPLOYED + Age_in_Years,
+  TARGET ~ AMT_INCOME_TOTAL + AMT_CREDIT + EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + CNT_CHILDREN + DAYS_EMPLOYED + Age_in_Years + AMT_ANNUITY,
   data = train_data,  
   family = binomial
 )
@@ -907,11 +931,15 @@ predicted_class_with_features <- ifelse(predictions_with_features > 0.5, 1, 0)
 
 confusionMatrix(factor(predicted_class_with_features), factor(test_target))
 
+summary(model_with_features2)
+
+summary(predictions_with_features)
 
 ```
+
+### ROC/AUC with more terms
 ```{r}
-# Load pROC package if needed
-library(pROC)
+
 
 # Compute ROC curve and AUC
 roc_curve_with_features <- roc(test_target, predictions_with_features)
@@ -926,18 +954,19 @@ coef(model_with_features2)
 ```
 
 
-
-
 Adding a few of the relevant features we have improved the model already! 
 ## logistic model with interaction terms: 
 
 Age * Income interaction term 
-Income *family members
+Income * number of kids
+
 ```{r}
+
 # Fit logistic regression model with Age * Income and Income * Family Members interaction terms
+
 model_interactions3 <- glm(
-  TARGET ~ Age_in_Years * AMT_INCOME_TOTAL + AMT_INCOME_TOTAL * CNT_FAM_MEMBERS + AMT_CREDIT + EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + CNT_CHILDREN + DAYS_EMPLOYED,
-  data = train_data,  # Make sure TARGET is recombined with train_features
+  TARGET ~ Age_in_Years * AMT_INCOME_TOTAL + AMT_INCOME_TOTAL * CNT_CHILDREN + AMT_CREDIT + EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + CNT_CHILDREN + DAYS_EMPLOYED,
+  data = train_data,  
   family = binomial
 )
 
@@ -958,12 +987,12 @@ auc_value_interactions <- auc(roc_curve_interactions)
 cat("AUC with Interaction Terms:", auc_value_interactions, "\n")
 
 
-
+summary(model_interactions3)
 
 ```
-roc_curve_simple
-roc_curve_with_features
-roc_curve_interactions
+The model has improved in performance in terms accuracy, but the interaction terms are not statistically significant. 
+
+## AUC plots 
 
 ```{r}
 # compare the plots for AUC for all models so far: 
@@ -972,9 +1001,9 @@ roc_curve_interactions
 
 # Simple model ROC plot
 roc_plot_simple <- ggplot() +
-  geom_line(aes(x = 1 - roc_curve_simple$specificities, y = roc_curve_simple$sensitivities), color = "blue") +
+  geom_line(aes(x = 1 - roc_curve_with_features$specificities, y = roc_curve_with_features$sensitivities), color = "blue") +
   geom_abline(linetype = "dashed", color = "gray") +
-  labs(title = paste("Simple Model ROC (AUC =", round(auc(roc_curve_simple), 3), ")"), x = "1 - Specificity", y = "Sensitivity") +
+  labs(title = paste("Simple Model ROC (AUC =", round(auc(roc_curve_with_features), 3), ")"), x = "1 - Specificity", y = "Sensitivity") +
   theme_minimal()
 
 # Model with terms ROC plot

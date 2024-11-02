@@ -27,7 +27,7 @@ The prior application data includes data on the previous applications for Home C
 
 knitr::opts_chunk$set(warning = FALSE)
 
-pacman::p_load(ggplot2, dplyr, skimr, caret, tidyverse, knitr, janitor, randomForest, gridExtra, corrplot, DMwR, pROC)
+pacman::p_load(e1071,ggplot2, dplyr, skimr, caret, tidyverse, knitr, janitor, randomForest, gridExtra, corrplot, DMwR, pROC)
 
 app_train <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/application_train.csv")
 
@@ -856,6 +856,8 @@ test_target <- test_data$TARGET  # Store only the TARGET column
 
 head(train_data)
 
+str(train_data$TARGET)
+
 ```
 
 
@@ -1029,4 +1031,464 @@ well we know there are large outliers in the data that we did not want to remove
 
 Yes, re-investigating the logistic model with different thresholds is a good idea, especially if you're focused on finding a balance between predicting defaults and minimizing false positives (e.g., giving loans to people who won’t default). The default threshold in logistic regression is 0.5, but depending on your business objective, a different threshold may improve model performance.
 
+## Random Forest:
 
+TARGET ~ AMT_INCOME_TOTAL + AMT_CREDIT + EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + CNT_CHILDREN + DAYS_EMPLOYED + Age_in_Years + AMT_ANNUITY
+
+```{r}
+
+train_data$TARGET <- factor(train_data$TARGET)
+
+# Define the formula, based on the variables in your logistic regression model
+formula_rf <- TARGET ~ AMT_INCOME_TOTAL + AMT_CREDIT + EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 +
+                       CNT_CHILDREN + DAYS_EMPLOYED + Age_in_Years + AMT_ANNUITY
+
+# Train the Random Forest model
+rf_model <- randomForest(
+  formula = formula_rf,
+  data = train_data,         # Training dataset
+  #ntree = 500,               # Number of trees (can adjust based on computation and performance)
+  #mtry = 3,                  # Number of variables to consider for each split (can tune this)
+  #importance = TRUE,        
+  na.action = na.omit        # Handle missing values if necessary
+)
+
+# Print the model summary
+print(rf_model)
+
+str(train_data$TARGET)
+```
+
+
+```{r}
+
+# Random Forest Predictions and Model Performance
+
+test_target <- factor(test_target)
+rf_predictions <- predict(rf_model, newdata = test_features, type = "response")
+
+confusionMatrix(rf_predictions, test_target)
+
+summary(rf_predictions)
+```
+
+
+
+
+## random forest feature importance 
+
+```{r}
+
+# simple imputation of missing data for random forest 
+
+train_df_imputed <- app_train
+for (var in names(train_df_imputed)) {
+  if (is.numeric(train_df_imputed[[var]])) {
+    train_df_imputed[[var]][is.na(train_df_imputed[[var]])] <- median(train_df_imputed[[var]], na.rm = TRUE)
+  }
+}
+
+# random forest model
+
+rf_model <- randomForest(TARGET ~ ., data = train_df_imputed, importance = TRUE, ntree = 50)
+
+# order the importance from highest to lowest
+
+importance_df <- as.data.frame(importance(rf_model))
+importance_df <- importance_df[order(-importance_df$MeanDecreaseGini), ]
+print(importance_df)
+```
+
+
+## UP SAMPLING: 
+
+```{r}
+
+train_data$TARGET <- factor(train_data$TARGET)
+
+# Perform upsampling
+upsampled_train_data <- upSample(x = train_features, 
+                                 y = train_data$TARGET,                                  
+                                 yname = "TARGET")                                      
+
+# Check the class balance after upsampling
+table(upsampled_train_data$TARGET)
+table(test_data$TARGET)
+
+```
+
+
+### Run glm model 2 on the upsampled data: INCLUDE IN THE SUBMISSION
+
+
+```{r}
+#  model on upsampled data
+
+glm_model_with_features_upsampled <- glm(
+  TARGET ~ AMT_INCOME_TOTAL + AMT_CREDIT + EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + CNT_CHILDREN + DAYS_EMPLOYED + Age_in_Years + AMT_ANNUITY,
+  data = upsampled_train_data,  
+  family = binomial
+)
+
+# predictions on the test set
+predictions_with_features_upsampled <- predict(glm_model_with_features_upsampled, newdata = test_features, type = "response")
+
+# convert probabilities to class labels (0 or 1) using a threshold of 0.55
+predicted_class_with_features_upsampled <- ifelse(predictions_with_features_upsampled > 0.55, 1, 0)
+predicted_class_with_features_upsampled <- factor(predicted_class_with_features_upsampled, levels = c("0", "1"))
+levels(predicted_class_with_features_upsampled)
+
+
+
+table(Predicted = predicted_class_with_features_upsampled, Actual = test_data$TARGET)
+
+summary(glm_model_with_features_upsampled)
+
+```
+Accuracy has not improved on the logistic model with features for the upsampled data
+
+
+## SVM Modeling START OF NEW SECTION TO ADD TO THE DOCUMENT
+
+### resplit the data at the same seed, SVM requires TARGET to be numeric
+
+```{r}
+
+# resplit the data at the same seed, SVM requires TARGET to be numeric
+
+app_train_imogen <- app_train |>
+  filter(!(is.na(EXT_SOURCE_1) & is.na(EXT_SOURCE_2) & is.na(EXT_SOURCE_3)))
+
+set.seed(123)
+
+# 10 % split
+train_indices_imogen <- createDataPartition(app_train_imogen$TARGET, p = 0.1, list = FALSE)
+train_data_SVM <- app_train_imogen[train_indices_imogen, ] 
+test_data_SVM  <- app_train_imogen[-train_indices_imogen, ] 
+
+prop.table(table(train_data_SVM$TARGET))
+prop.table(table(test_data_SVM$TARGET))
+
+# Separate features and target for the training set
+train_features_SVM <- train_data_SVM |>
+  select(-TARGET)  # Remove the TARGET column
+train_target_SVM <- train_data_SVM$TARGET  # Store only the TARGET column
+
+# Separate features and target for the test set
+test_features_SVM <- test_data_SVM |> select(-TARGET)  # Remove the TARGET column
+test_target_SVM <- test_data_SVM$TARGET  # Store only the TARGET column
+
+head(train_data_SVM)
+
+str(train_data_SVM$TARGET)
+str(train_data_SVM$SK_ID_CURR)
+
+any(is.na(train_data_SVM[, -c(1, 2)])) 
+
+
+```
+
+
+
+#### Explore Correlations: ADD THIS SECTION
+
+SVM models do not perform very well on highly correlated data, as our data includes highly correlated terms, the SVM model may not perform well. 
+
+```{r}
+
+# Correlation matrix: 
+
+#requires numeric variables 
+str(train_data_SVM$TARGET)
+str(train_data_SVM$SK_ID_CURR)
+
+# deal with NA's
+numeric_train_no_missing <- train_data_SVM[, -c(1, 2)]
+numeric_train_no_missing <- numeric_train_no_missing[, sapply(numeric_train_no_missing, is.numeric)]
+
+corr_matrix <- cor(numeric_train_no_missing, use = "complete.obs")
+
+
+corr_table <-as.data.frame(as.table(corr_matrix))
+
+# remove the self correlations 
+
+corr_table <- corr_table[corr_table$Var1 != corr_table$Var2, ]
+
+# sort by the absolute value of the correlation
+corr_table <- corr_table[order(abs(corr_table$Freq), decreasing = TRUE), ]
+
+#  top 20 correlations using 
+kable(head(corr_table, 20), caption = "Top 20 Non-Self Correlations in the Trainin Dataset")
+
+
+```
+
+
+### Exploire linear seperablity of the data:ADD THIS SECTION
+
+```{r}
+
+train_data_SVM$TARGET <- as.factor(train_data_SVM$TARGET)
+
+# plot different combinations of variables to explore linear separability
+
+# Income vs Credit amounts plot
+ggplot(train_data_SVM, aes(x = AMT_INCOME_TOTAL, y = AMT_CREDIT, color = TARGET)) +
+  geom_point(size = 2) +
+  labs(title = "Income vs Credit", x = "AMT_INCOME_TOTAL", y = "AMT_CREDIT") +
+  theme_minimal()
+
+# days employed vs Credit Score
+
+# days employed is a negative value to indicate the number of days back from the application date one was employed
+train_data_SVM$DAYS_EMPLOYED <- abs(train_data_SVM$DAYS_EMPLOYED) # fix the negatives by taking absolute value
+
+ggplot(train_data_SVM, aes(x = DAYS_EMPLOYED, y = EXT_SOURCE_2, color = TARGET)) +
+  geom_point(size = 2) +
+  labs(title = "Days emplopyed vs Credit Score", x = "DAYS_EMPLOYED", y = "EXT_SOURCE_2") +
+  theme_minimal()
+```
+
+These plots indicate that there is not a large amount of linear separability in the data, this means that a linear SVM model may not be the best route, and we should explore the performance of a radial model. 
+
+### encode features for modeling: INCLUDE THIS SECTION 
+
+```{r}
+## DUMMY ENCODING:
+
+# combine features from both training and test sets (only temp to ensure dummyfying is even across train and test sets)
+combined_features <- rbind(train_features_SVM, test_features_SVM)
+
+# dummy encode data
+dummies <- dummyVars(~ ., data = combined_features)
+combined_features_encoded <- as.data.frame(predict(dummies, newdata = combined_features))
+
+# split back into train and test sets
+train_features_encoded <- combined_features_encoded[1:nrow(train_features_SVM), ]
+test_features_encoded <- combined_features_encoded[(nrow(train_features_SVM) + 1):nrow(combined_features_encoded), ]
+
+# scale across with the training set
+scales <- preProcess(train_features_encoded, method = c("center", "scale"))
+
+# Apply scaling to both the training and test encoded features
+train_features_scaled <- predict(scales, train_features_encoded)
+test_features_scaled <- predict(scales, test_features_encoded)
+
+
+```
+
+Using dummies_train for both train_features and test_features ensures that the dummy variables are consistent across both datasets. 
+
+
+### scale and center : INCLUDE THIS SECTION
+
+```{r}
+
+# Combine train features and target
+train_data_combined <- cbind(train_features_scaled, TARGET = train_target_SVM)
+
+# Combine test features and target
+test_data_combined <- cbind(test_features_scaled, TARGET = test_target_SVM)
+
+# remove NA's in the combined training data
+train_data_clean <- na.omit(train_data_combined)
+
+# remove NAs in the combined test data
+test_data_clean <- na.omit(test_data_combined)
+
+# split back into features and target 
+train_features_scaled <- train_data_clean[, -ncol(train_data_clean)]  # All columns except last
+train_target_SVM <- train_data_clean$TARGET                               # Last column
+
+# split back into features and target 
+test_features_scaled <- test_data_clean[, -ncol(test_data_clean)]     # All columns except last
+test_target_SVM <- test_data_clean$TARGET  
+
+# make sure the data is the same size and no errors were created in the scaling/centering
+nrow(train_features_scaled) == length(train_target_SVM) 
+nrow(test_features_scaled) == length(test_target_SVM)
+
+
+train_data_final_SVM <- cbind(train_features_scaled, TARGET = train_target_SVM)
+
+```
+
+### linear model - DONT include in submission it takes too long to run
+
+```{r}
+
+svm_model <- svm(TARGET ~ ., data = train_data_final_SVM, kernel = "linear", cost = 1)
+
+
+svm_predictions <- predict(svm_model, test_features_scaled)
+print(length(svm_predictions))
+print(length(test_target))
+
+
+svm_predictions_binary <- ifelse(svm_predictions > 0.5, "1", "0")
+confusionMatrix(factor(svm_predictions_binary), factor(test_target_SVM))
+
+
+```
+
+### radial model base - DONT include takes too long to run
+
+```{r}
+# Radial model:
+
+# Train an SVM model with a radial kernel
+svm_radial <- svm(TARGET ~ ., data = train_data_final_SVM, kernel = "radial", cost = 1, gamma = 0.1)
+
+# Make predictions on the test set
+svm_radial_predictions <- predict(svm_radial, test_features_scaled)
+
+radial_predictions_binary <- ifelse(svm_radial_predictions > 0.5, "1", "0")
+confusionMatrix(factor(radial_predictions_binary), factor(test_target_SVM))
+# still jsut majoirty
+
+```
+this did not do any better than majoirty class, and is just predicting 0 for all data points
+
+## Hyper param tuning on base radial model: DONT include takes too long to run
+
+temporarily reduce the data set to find a good parameter
+
+set.seed(123)
+sample_indices <- sample(1:nrow(train_data_final), size = 5000)  # Adjust sample size as needed
+train_data_sample <- train_data_final[sample_indices, ]
+
+
+```{r}
+
+
+# Convert 0 and 1 to factors with appropriate labels for both train and test targets
+train_target_tuning <- factor(train_target, levels = c(0, 1), labels = c("No", "Yes"))
+test_target_tuning <- factor(test_target, levels = c(0, 1), labels = c("No", "Yes"))
+
+# Re-combine with the features after converting the target
+train_data_tuning <- cbind(train_features_scaled, TARGET = train_target_tuning)
+
+set.seed(123)
+sample_indices <- sample(1:nrow(train_data_tuning), size = 5000)  # Adjust sample size as needed
+train_data_sample <- train_data_tuning[sample_indices, ]
+
+
+fitControl <- trainControl(
+  method = "repeatedcv",          # Repeated cross-validation
+  number = 4,                     # 4-fold cross-validation
+  repeats = 2,                    # Repeat cross-validation twice
+  summaryFunction = twoClassSummary,  # Use ROC for evaluation
+  classProbs = TRUE               # Needed for ROC metric
+)
+
+grid <- expand.grid(
+  sigma = c(0.01, 0.05),         # Gamma equivalents for the RBF kernel
+  C = c(0.05, 0.75, 1, 1.5, 2)   # Different values of cost
+)
+
+
+# Train the radial SVM with hyperparameter tuning
+svmFitRadial <- train(
+  TARGET ~ ., data = train_data_sample,
+  method = "svmRadial",
+  trControl = fitControl,
+  metric = "ROC",
+  tuneGrid = grid,
+  verbose = FALSE
+)
+
+
+```
+
+
+```{r}
+
+# View the best model parameters
+print(svmFitRadial)  # Shows the best values for C and sigma
+
+# Plot ROC with different values of C and sigma
+plot(svmFitRadial)
+
+svm_radial_predictions_best <- predict(svmFitRadial, test_features_scaled)
+
+test_target <- factor(test_target, levels = c(0, 1), labels = c("No", "Yes"))
+
+
+confusionMatrix(svm_radial_predictions_best, test_target)
+
+```
+
+
+
+This model is likley performing poortly due to the class imbalance, and the outliers and missing data 
+
+- there is a ton of data, we already took it down to a smaller sample of our training data, I started with 2500 and then went to 5000, and saw improvment in the AUC so i think that is affecting the results, however, including more forces the model to run for a really long time
+
+
+### SVM Radial model on just the set of features - DO INCLUDE
+Model a radial SVM on the set of features we used for the glmmodel 2
+
+```{r}
+# Select only the desired features in the training and test sets
+selected_features <- c("AMT_INCOME_TOTAL", "AMT_CREDIT", "EXT_SOURCE_1","EXT_SOURCE_2", "EXT_SOURCE_3","CNT_CHILDREN","DAYS_EMPLOYED", "Age_in_Years","AMT_ANNUITY" )  # Specify your chosen features
+
+train_features_selected <- train_features_scaled[, selected_features]
+test_features_selected <- test_features_scaled[, selected_features]
+
+train_data_selected <- cbind(train_features_selected, TARGET = train_target_SVM)
+
+head(train_data_selected)
+```
+
+#### Hyper parameter Tuning for the radial model on select features : DO INCLUDE
+
+```{r}
+
+train_data_selected$TARGET <- factor(train_data_selected$TARGET, levels = c(0, 1), labels = c("No", "Yes"))
+
+# Define your trainControl and grid if you haven’t already
+fitControl <- trainControl(
+  method = "repeatedcv",
+  number = 4,
+  repeats = 2,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE
+)
+
+grid <- expand.grid(sigma = c(0.01, 0.05), C = c(0.05, 0.75, 1, 1.5, 2))
+
+# Train the radial SVM model using only the selected features
+svmFitRadial_selected <- train(
+  TARGET ~ ., data = train_data_selected,
+  method = "svmRadial",
+  trControl = fitControl,
+  metric = "ROC",
+  tuneGrid = grid,
+  verbose = FALSE
+)
+
+```
+
+
+####  model perfomance for radial model with features: DO INCLUDE
+
+```{r}
+
+print(svmFitRadial_selected)
+
+# Make predictions on the test set with only the selected features
+
+svm_radial_predictions_selected <- predict(svmFitRadial_selected, test_features_selected)
+
+test_target_SVM <- factor(test_target_SVM, levels = c(0, 1), labels = c("No", "Yes"))
+
+# Evaluate the model
+confusionMatrix(svm_radial_predictions_selected, test_target_SVM)
+
+
+```
+
+model is not producing any true positives, it suggests that it might be overly biased toward predicting the negative class. This could happen due to class imbalance, poor hyper-parameter tuning, or the model simply not finding enough distinguishing features for the positive class. 
+
+We could look at running the model on the upsampled data, or just sticking with improving the RandomForest model, as those models tend to handle class imbalance and outliers better, 

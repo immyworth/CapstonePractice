@@ -1,0 +1,1382 @@
+---
+title: "Modeling"
+author: "Madalyn Young, Imogen Holdsworth, Tyler Swanson"
+date: "2024-11-03"
+output:
+  html_document:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Contents"
+    toc_float:
+      position: "left"
+execute:
+  warning: false
+  message: false
+---
+
+```{r echo = FALSE, warning=FALSE}
+pacman::p_load(caret, psych, rpart, rpart.plot, rJava, RWeka, rminer, matrixStats, knitr, tictoc, tidyverse, dplyr, ggplot2, randomForest, DmWR, pROC, gridExtra, xgboost)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+App_train <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/application_train.csv") 
+#App_test <-  read.csv("home-credit-default-risk//application_test.csv") 
+
+App_train2 <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/application_train.csv") 
+```
+
+## Imogen add:
+
+View the amount of missing data to explain our removal process
+```{r}
+# locate only columns with missing values
+
+missing_values <- colSums(is.na(App_train))
+
+missing_values <- missing_values[missing_values > 0]
+
+
+# reformat for percentage of missing data
+
+missing_data_summary <- tibble(
+  Variable = names(missing_values),               
+  MissingCount = as.numeric(missing_values),      
+  MissingPercentage = (as.numeric(missing_values) / nrow(App_train)) * 100  
+)
+
+missing_data_summary <- missing_data_summary |>
+  arrange(desc(MissingPercentage))
+
+# display the summary table
+
+kable(missing_data_summary)
+```
+Remove data that is more than 48% missing which seems to be a "cut off" point for the data that is most missing, the values missing less than 48 percent range from .0003% missing to 19.82% missing. Those can be imputed.
+
+## Imogen Updated
+Remove data that is more than 48 percent missing(except external source 1), Remove those with very high income, change birth to be in years, filter out families with more than 15 children
+```{r}
+#clean up App_Train
+App_train <- App_train %>% 
+  select(all_of(c("EXT_SOURCE_1")), where(~ mean(is.na(.)) <= 0.48)) %>%   # keep columns with <= 48% missing data and the column EXT_SOURCE_1
+  filter(AMT_INCOME_TOTAL <= 2000000) %>% # 42 people default between 1M and 2M
+  filter(CNT_CHILDREN <= 15) %>% 
+  # Add a new column for age
+  mutate(Age = -DAYS_BIRTH / 365)
+
+App_train$TARGET <- as.factor(App_train$TARGET)
+```
+
+
+## Imogen add:
+
+```{r, warning = FALSE}
+# AMT_REQ_CREDIT_BUREAU_HOUR: This variable captures how many times a credit bureau has been contacted about the client’s credit history within a one-hour window
+
+# Create individual plots for each variable
+p1 <- ggplot(App_train, aes(x = AMT_REQ_CREDIT_BUREAU_HOUR)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "AMT_REQ_CREDIT_BUREAU_HOUR")
+
+p2 <- ggplot(App_train, aes(x = AMT_REQ_CREDIT_BUREAU_DAY)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "AMT_REQ_CREDIT_BUREAU_DAY")
+
+p3 <- ggplot(App_train, aes(x = AMT_REQ_CREDIT_BUREAU_WEEK)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "AMT_REQ_CREDIT_BUREAU_WEEK")
+
+p4 <- ggplot(App_train, aes(x = AMT_REQ_CREDIT_BUREAU_MON)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "AMT_REQ_CREDIT_BUREAU_MON")
+
+p5 <- ggplot(App_train, aes(x = AMT_REQ_CREDIT_BUREAU_QRT)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "AMT_REQ_CREDIT_BUREAU_QRT")
+
+p6 <- ggplot(App_train, aes(x = AMT_REQ_CREDIT_BUREAU_YEAR)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "AMT_REQ_CREDIT_BUREAU_YEAR")
+
+# Combine the plots in a grid
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol = 2)
+
+
+```
+
+## Imogen add:
+```{r}
+# Impute the above variables for the missing values with the mode of 0
+
+credit_bureau_vars <- c("AMT_REQ_CREDIT_BUREAU_HOUR", "AMT_REQ_CREDIT_BUREAU_DAY", 
+                        "AMT_REQ_CREDIT_BUREAU_WEEK", "AMT_REQ_CREDIT_BUREAU_MON", 
+                        "AMT_REQ_CREDIT_BUREAU_QRT", "AMT_REQ_CREDIT_BUREAU_YEAR")
+
+# Loop through each variable and replace missing values with the mode (0)
+for (var in credit_bureau_vars) {
+  App_train[[var]][is.na(App_train[[var]])] <- 0
+}
+
+```
+
+
+Now we are left with: 
+OBS_30_CNT_SOCIAL_CIRCLE and OBS_60_CNT_SOCIAL_CIRCLE (Observations):
+These variables represent how many people in the client's social circle have been observed with overdue payments (30 or 60 days past due).
+Essentially, these variables measure the number of people in the client's social network who are being tracked or monitored regarding their credit status (30 or 60 days overdue).
+DEF_30_CNT_SOCIAL_CIRCLE and DEF_60_CNT_SOCIAL_CIRCLE (Defaults):
+These variables represent how many people in the client's social circle have actually defaulted on payments (i.e., 30 or 60 days overdue and marked as a default).
+So, these are the number of people who not only have overdue payments but are officially classified as being in default for 30 or 60 days.
+
+These could be valuable indicators in our model, lets take a look at the data distribution and see how we can impute the missing values:
+
+## Imogen add:
+```{r, warning = FALSE}
+# Create individual plots for each variable
+
+p7 <- ggplot(App_train, aes(x = OBS_30_CNT_SOCIAL_CIRCLE)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "OBS_30_CNT_SOCIAL_CIRCLE")
+
+p8 <- ggplot(App_train, aes(x = OBS_60_CNT_SOCIAL_CIRCLE)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "OBS_60_CNT_SOCIAL_CIRCLE")
+
+p9 <- ggplot(App_train, aes(x = DEF_30_CNT_SOCIAL_CIRCLE)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "DEF_30_CNT_SOCIAL_CIRCLE")
+
+p10 <- ggplot(App_train, aes(x = DEF_60_CNT_SOCIAL_CIRCLE)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "DEF_60_CNT_SOCIAL_CIRCLE")
+
+
+# Combine the plots in a grid
+grid.arrange(p7, p8, p9, p10, ncol = 2)
+```
+## Imogen add:
+```{r}
+# impute the missing data for the variables above:
+
+
+social_bureau_vars <- c("OBS_30_CNT_SOCIAL_CIRCLE", "OBS_60_CNT_SOCIAL_CIRCLE", 
+                        "DEF_30_CNT_SOCIAL_CIRCLE", "DEF_60_CNT_SOCIAL_CIRCLE")
+
+# Loop through each variable and replace missing values with the mode (0)
+for (var in social_bureau_vars) {
+  App_train[[var]][is.na(App_train[[var]])] <- 0
+}
+
+```
+## Imogen add:
+```{r, warning = FALSE}
+
+p11 <- ggplot(App_train, aes(x = AMT_GOODS_PRICE)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "AMT_GOODS_PRICE")
+
+p12 <- ggplot(App_train, aes(x = AMT_ANNUITY)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "AMT_ANNUITY")
+p13 <- ggplot(App_train, aes(x = CNT_FAM_MEMBERS)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "CNT_FAM_MEMBERS")
+
+p14 <- ggplot(App_train, aes(x = DAYS_LAST_PHONE_CHANGE)) + 
+  geom_bar(fill = "skyblue", color = "black") + 
+  labs(title = "DAYS_LAST_PHONE_CHANGE")
+
+
+# Combine the plots in a grid
+grid.arrange(p11,p12,p13,p14, ncol = 2)
+summary(App_train$DAYS_LAST_PHONE_CHANGE)
+```
+
+## Imogen add:
+lets use the mode for the count fam members, median for the amt goods price and amt annuity and days last phone change, the visualization for the days last phone change indicates some possible outliers and may require additional fixing. 
+
+```{r}
+
+# Impute AMT_GOODS_PRICE with median
+
+App_train$AMT_GOODS_PRICE[is.na(App_train$AMT_GOODS_PRICE)] <- median(App_train$AMT_GOODS_PRICE, na.rm = TRUE)
+
+# Impute AMT_ANNUITY with median
+
+App_train$AMT_ANNUITY[is.na(App_train$AMT_ANNUITY)] <- median(App_train$AMT_ANNUITY, na.rm = TRUE)
+
+# Impute CNT_FAM_MEMBERS with mode (most common value)
+
+mode_fam_members <- as.numeric(names(sort(table(App_train$CNT_FAM_MEMBERS), decreasing = TRUE)[1]))
+App_train$CNT_FAM_MEMBERS[is.na(App_train$CNT_FAM_MEMBERS)] <- mode_fam_members
+
+# Impute DAYS_LAST_PHONE_CHANGE with median
+
+App_train$DAYS_LAST_PHONE_CHANGE[is.na(App_train$DAYS_LAST_PHONE_CHANGE)] <- median(App_train$DAYS_LAST_PHONE_CHANGE, na.rm = TRUE)
+
+```
+
+```{r}
+summary(App_train$DAYS_LAST_PHONE_CHANGE) # "How many days before application did client change the phone?"
+
+#  proportion of zero values
+ sum(App_train$DAYS_LAST_PHONE_CHANGE == 0) / nrow(App_train)
+
+```
+ Was determined that there were no obvious issues, Days last phone change indicates "How many days before application did client change the phone?" only 11 % of the data indicates a phone change of day of the application. 
+
+## Imogen add:
+Lets re run the missing data list:
+
+```{r}
+missing_values <- colSums(is.na(App_train))
+
+missing_values <- missing_values[missing_values > 0]
+
+# reformat for percentage of missing data
+
+missing_data_summary <- tibble(
+  Variable = names(missing_values),               
+  MissingCount = as.numeric(missing_values),      
+  MissingPercentage = (as.numeric(missing_values) / nrow(App_train)) * 100  
+)
+
+missing_data_summary <- missing_data_summary |>
+  arrange(desc(MissingPercentage))
+
+# display the summary table
+
+kable(missing_data_summary)
+```
+Great now our only missing data is the external sources. 
+
+### Imogen add:
+fix the days employed, make it positive days employed and also remove the error of 365243
+```{r}
+# days employ
+table(App_train$'TARGET') # 282642  24823  
+
+sum(App_train$DAYS_EMPLOYED == 365243)
+
+App_train <- App_train[App_train$DAYS_EMPLOYED != 365243, ]
+
+table(App_train$'TARGET') # 230260  21833  clean up resulted in some loss of the positive instance of defaulting
+
+App_train$DAYS_EMPLOYED <- abs(App_train$DAYS_EMPLOYED)
+
+summary(App_train$DAYS_EMPLOYED) # Check the updated column
+  
+```
+
+Days employed is now cleaned up, and positive.
+
+
+
+## Imogen added:
+
+Now to deal with the missing data on external source:
+Lets create an indicator for where applicants are missing data from external source. 
+
+```{r}
+# Check how many people have no value across all external sources
+App_train <- App_train %>%
+  mutate(All_EXT_Missing = ifelse(is.na(EXT_SOURCE_1) & is.na(EXT_SOURCE_2) & is.na(EXT_SOURCE_3), 1, 0))
+
+# Count the number of people with all external sources missing
+total_missing <- sum(App_train$All_EXT_Missing)
+cat("Total people with all EXT_SOURCEs missing:", total_missing, "\n")
+
+# Group by TARGET and count how many people have all external sources missing for each TARGET value
+missing_by_target <- App_train %>%
+  filter(All_EXT_Missing == 1) %>%
+  group_by(TARGET) %>%
+  summarise(Count = n())
+
+# Display the counts for TARGET = 0 and TARGET = 1
+missing_by_target
+
+
+```
+there are 128 defaulters who have NA values across all the external sources
+
+```{r}
+summary(App_train$EXT_SOURCE_1)
+summary(App_train$EXT_SOURCE_2)
+summary(App_train$EXT_SOURCE_3)
+
+```
+create missing indicator variables: These indicators may capture predictive signals related to financial exclusion or lack of a credit history.Complete absence of credit score has been captured by All_EXT_Missing 
+```{r}
+
+App_train <- App_train %>%
+  mutate(
+    EXT_SOURCE_1_Missing = ifelse(is.na(EXT_SOURCE_1), 1, 0),
+    EXT_SOURCE_2_Missing = ifelse(is.na(EXT_SOURCE_2), 1, 0),
+    EXT_SOURCE_3_Missing = ifelse(is.na(EXT_SOURCE_3), 1, 0)
+  )
+
+head(App_train)
+
+```
+
+
+```{r}
+# Calculate correlation matrix for EXT_SOURCE variables
+correlation_matrix <- App_train %>%
+  select(EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3) %>%
+  cor(use = "pairwise.complete.obs")
+print(correlation_matrix)
+```
+
+```{r}
+# Default rates by missingness for each EXT_SOURCE
+missing_target_summary <- App_train %>%
+  mutate(
+    All_EXT_Missing = ifelse(is.na(EXT_SOURCE_1) & is.na(EXT_SOURCE_2) & is.na(EXT_SOURCE_3), 1, 0)
+  ) %>%
+  group_by(EXT_SOURCE_1_Missing, EXT_SOURCE_2_Missing, EXT_SOURCE_3_Missing, All_EXT_Missing) %>%
+  summarise(
+    Default_Rate = mean(TARGET),
+    Count = n())
+print(missing_target_summary)
+```
+
+```{r}
+App_train %>%
+  select(EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3) %>%
+  pivot_longer(cols = everything(), names_to = "Source", values_to = "Value") %>%
+  filter(!is.na(Value)) %>%
+  ggplot(aes(x = Value)) +
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  facet_wrap(~Source, scales = "free") +
+  labs(title = "Distribution of Non-Missing EXT_SOURCE Values", x = "Value", y = "Count")
+```
+
+
+```{r}
+# Missingness by key features (e.g., income and age)
+missing_by_features <- App_train %>%
+  mutate(
+    EXT_SOURCE_1_Missing = ifelse(is.na(EXT_SOURCE_1), 1, 0),
+    EXT_SOURCE_2_Missing = ifelse(is.na(EXT_SOURCE_2), 1, 0),
+    EXT_SOURCE_3_Missing = ifelse(is.na(EXT_SOURCE_3), 1, 0)
+  ) %>%
+  group_by(EXT_SOURCE_1_Missing, EXT_SOURCE_2_Missing, EXT_SOURCE_3_Missing) %>%
+  summarise(
+    Avg_Income = mean(AMT_INCOME_TOTAL),
+    Avg_Age = mean(-DAYS_BIRTH / 365),
+    Default_Rate = mean(TARGET),
+    Count = n()
+  )
+print(missing_by_features)
+```
+
+^^ use the above to determine the best route for imputing the NA in ext sources
+Correlation Analysis:
+
+The external scores (EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3) are weakly correlated (highest correlation is 0.23 between EXT_SOURCE_1 and EXT_SOURCE_2).
+Implication: These variables represent largely independent sources of information, so missing values for one cannot be reliably predicted from the others.
+Distributions:
+
+The histograms show a well-distributed range of values for all three sources.
+No extreme skew or outliers, so median imputation is a reasonable approach if imputation is necessary.
+Default Rates by Missingness:
+
+The Default_Rate column is NA, indicating you didn't calculate the actual default rates (likely due to missing TARGET data in your provided code).
+Implication: We need to calculate how TARGET = 1 correlates with missingness to determine if it's predictive.
+Key Features by Missingness:
+
+Income and Age Patterns:
+Missing values in all three sources (All_EXT_Missing = 1) are associated with slightly higher average income and older age (Avg_Age = 42.75).
+This suggests that missing external scores might not solely indicate financial exclusion, but potentially unique financial behaviors or reporting differences.
+
+
+
+ Impute Missing Values
+Use median imputation for missing values because:
+The distributions of all three sources are symmetric and central tendency is clear.
+The weak correlation between sources suggests model-based imputation won't significantly outperform simple methods.
+
+```{r}
+App_train <- App_train %>%
+  mutate(
+    EXT_SOURCE_1 = ifelse(is.na(EXT_SOURCE_1), median(EXT_SOURCE_1, na.rm = TRUE), EXT_SOURCE_1),
+    EXT_SOURCE_2 = ifelse(is.na(EXT_SOURCE_2), median(EXT_SOURCE_2, na.rm = TRUE), EXT_SOURCE_2),
+    EXT_SOURCE_3 = ifelse(is.na(EXT_SOURCE_3), median(EXT_SOURCE_3, na.rm = TRUE), EXT_SOURCE_3)
+  )
+```
+
+```{r}
+App_train %>%
+  group_by(All_EXT_Missing, TARGET) %>%
+  summarise(Count = n(), Default_Rate = mean(TARGET, na.rm = TRUE))
+```
+
+
+
+## Feature engineering : Imogen Added 
+```{r include = FALSE}
+# Task 3
+
+#**WE DID NOT DO THE DEBT TO INCOME OR LOAN AMOUNT/CREDIT SCORE. DO WE WANT TO BEFORE SUNDAY?
+
+#Divide loan amount by credit score
+  # it can also scale the loan amounts if we divide it by loan amount (a large loan for someone with a low score might signal higher default)
+  
+# Credit to income ratio: Basic
+summary(App_train$AMT_INCOME_TOTAL)
+
+#create super simple debt to income using credit and income
+App_train <- App_train |> 
+  mutate(DTI = AMT_CREDIT / AMT_INCOME_TOTAL)
+
+#loan amount to credit score
+
+App_train <- App_train |>
+  mutate(
+    Loan_to_Credit_Score1 = AMT_CREDIT / EXT_SOURCE_1,
+    Loan_to_Credit_Score2 = AMT_CREDIT / EXT_SOURCE_2,
+    Loan_to_Credit_Score3 = AMT_CREDIT / EXT_SOURCE_3
+  )
+
+#annuity to income :  how much of their income a borrower spends on periodic loan payments ->  high ratio might flag financial stress due to high loan payments
+
+App_train <- App_train |>
+  mutate(Annuity_to_Income_Ratio = AMT_ANNUITY / AMT_INCOME_TOTAL)
+summary(App_train$Annuity_to_Income_Ratio)
+
+# credit "duration" -> credit/annuity  higher ratio suggests longer repayment terms, which could be riskier
+
+App_train <- App_train |>
+  mutate(Credit_Duration_Ratio = AMT_CREDIT / AMT_ANNUITY)
+
+
+# income/ family members:
+
+App_train <- App_train |>
+  mutate(
+    Per_Capita_Income = AMT_INCOME_TOTAL / CNT_FAM_MEMBERS)
+
+
+# loan /family memebers: 
+
+App_train <- App_train |>
+  mutate(
+    Per_Capita_Loan = AMT_CREDIT / CNT_FAM_MEMBERS)
+
+
+```
+
+
+# Task 1
+**Set up a training set and a validation set using application_train.csv data set to do cross-validation.  Alternatively you could perform cross-validation using a different framework, such as k-fold cross validation as implemented in modeling packages such as caret or tidymodels or scikit-learn. The model performance that matters, of course, is the estimated performance on the test set as well as the Kaggle score.**
+
+```{r}
+head(App_train)
+set.seed(123)
+
+#keep at 10% because the data set is large
+inTrain <- createDataPartition(App_train$TARGET, p = .1, list = FALSE)
+
+
+train_set <- App_train[inTrain,]
+test_set <- App_train[-inTrain,]
+test_target <- test_set$TARGET
+head(test_target)
+head(train_set)
+head(test_set)
+
+# need to remove target from test set:
+test_set <- test_set |>
+  select(-TARGET)
+
+#test_target <- App_train[-inTrain,2] # this was casusing issues as the train target was not column 2 for me
+
+
+```
+
+
+# Task 2
+**Identify the performance benchmark established by the majority class classifier.**
+
+```{r}
+prop.table(table(App_train$'TARGET'))
+```
+
+
+If we just went off the majority classifier to predict if someone would default, they would not 91.92% of the time. The performance benchmark is 91.92%.
+
+# Task 3
+**Fit several different logistic regression models using different predictors. Do interaction terms improve the model?  Compare model performance using not just accuracy but also AUC.**
+
+```{r}
+glmModel1 <- glm(TARGET~ 1, family = binomial, data = train_set)
+
+summary(glmModel1)
+```
+
+```{r}
+prob <- exp(coef(glmModel1)[1]) / (1 + exp(coef(glmModel1)[1]))
+prob
+```
+
+
+The odds of the target being one are 0.086. The negative intercept shows that there are low likelihood of the target being 1
+
+```{r}
+
+predictions1 <- predict(glmModel1, newdata = test_set, type = "response")
+summary(predictions1)
+mean(predictions1)
+
+
+
+##All thses are returning null???
+# Just commenting this out for now, I dont think we need to worry about ACC, we can just use the ROC-AUC mmetric(test_target, predictions1, metric = c("ACC"))
+
+```
+Just using the target gets us to 91.93
+
+```{r}
+#head(test_target)
+#table(test_target) ensure test target is in 0 and 1 binary
+unique(test_target)
+
+
+roc_curve_model1 <- roc(test_target, predictions1)
+auc_value_model1 <- auc(roc_curve_model1)
+print(paste("AUC:", auc_value_model1))
+
+plot(roc_curve_model1, main = "ROC Curve for Baseline Model", col = "blue", lwd = 2)
+
+
+```
+An AUC of 0.5 indicates that the model has no discriminatory ability—it is performing no better than random guessing. This result is expected given the simplicity of your baseline model (glm(TARGET ~ 1)), which predicts the same probability (the mean probability of TARGET = 1) for all observations.
+
+add in our features : add in the generated feartures 
+
+next step build a model with predictors, show the value of the created features I made. 
+compare
+
+
+```{r}
+train_control <- trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary)
+
+train_set$TARGET <- factor(train_set$TARGET, levels = c(0, 1), labels = c("No", "Yes"))
+test_target <- factor(test_target, levels = c(0, 1), labels = c("No", "Yes"))
+
+glm_cv <- train(
+  TARGET ~ Age + EXT_SOURCE_1 + EXT_SOURCE_2 +  EXT_SOURCE_3 + AMT_INCOME_TOTAL + CNT_CHILDREN + DAYS_EMPLOYED + AMT_CREDIT + AMT_ANNUITY, 
+  data = train_set, 
+  method = "glm",
+  family = binomial,
+  trControl = train_control,
+  metric = "ROC"
+)
+
+# Print cross-validated AUC
+print(glm_cv)
+
+predictions2IG <- predict(glm_cv, newdata = test_set, type = "prob")[, 2]
+
+
+# Compute ROC curve and AUC
+roc_curve_model2 <- roc(test_target, predictions2IG)
+auc_test_2 <- auc(roc_curve_model2)
+print(paste("Added glm model with feature AUC:", auc_test_2))
+
+# Plot the ROC curve
+plot(roc_curve_model2, main = "ROC Curve glm with features", col = "blue", lwd = 2)
+
+```
+much of an improvement form .5
+
+
+create another model adding in the engineered features
+
+
+```{r}
+glm_cv2 <- train(
+  TARGET ~ Age + EXT_SOURCE_1 + EXT_SOURCE_2 +  EXT_SOURCE_3 + AMT_INCOME_TOTAL + CNT_CHILDREN + DAYS_EMPLOYED + AMT_CREDIT + AMT_ANNUITY + Per_Capita_Income + Credit_Duration_Ratio + Per_Capita_Loan + Loan_to_Credit_Score1 + Loan_to_Credit_Score2 + Loan_to_Credit_Score3 + DTI + EXT_SOURCE_1_Missing + EXT_SOURCE_2_Missing + EXT_SOURCE_3_Missing + All_EXT_Missing, 
+  data = train_set, 
+  method = "glm",
+  family = binomial,
+  trControl = train_control,
+  metric = "ROC"
+)
+
+# Print cross-validated AUC
+print(glm_cv2)
+summary(glm_cv2)
+
+predictions3IG <- predict(glm_cv2, newdata = test_set, type = "prob")[, 2]
+
+
+# Compute ROC curve and AUC
+roc_curve_model3 <- roc(test_target, predictions3IG)
+auc_test_3 <- auc(roc_curve_model3)
+print(paste("Added glm model with feature AUC:", auc_test_3))
+
+# Plot the ROC curve
+plot(roc_curve_model3, main = "ROC Curve glm with engineered features", col = "blue", lwd = 2)
+
+```
+
+visualize all three glm curves togther
+
+EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + DAYS_EMPLOYED + Loan_to_Credit_Score1 + EXT_SOURCE_1_Missing + EXT_SOURCE_3_Missing are the only significant vairables
+
+
+
+```{r}
+# Plot the first ROC curve
+plot(roc_curve_model1, main = "ROC Curve Comparison", col = "red", lwd = 2)
+
+# Add the second ROC curve
+plot(roc_curve_model2, col = "blue", lwd = 2, add = TRUE)
+
+# Add the third ROC curve
+plot(roc_curve_model3, col = "green", lwd = 2, add = TRUE)
+
+# Add a legend to differentiate the curves
+legend("bottomright", 
+       legend = c("Baseline Model", "GLM with Features", "GLM with Engineered Features"), 
+       col = c("red", "blue", "green"), 
+       lwd = 2)
+```
+
+compare aucroc
+
+```{r}
+# Compare ROC curves (e.g., model2 vs. model3)
+roc.test(roc_curve_model2, roc_curve_model3)
+
+
+```
+
+
+```{r}
+# Define control for RFE
+#rfe_control <- rfeControl(functions = caretFuncs, method = "cv", number = 5)
+
+# Perform RFE
+#rfe_results <- rfe(
+ # x = train_set[, -which(names(train_set) == "TARGET")],
+ # y = train_set$TARGET,
+ # sizes = c(5, 10, 15, 20), # Number of predictors to test
+  #rfeControl = rfe_control
+#)
+
+# View results
+#print(rfe_results)
+# print(rfe_results$optVariables)
+```
+
+^ too computationally expensive
+
+
+
+Explore Random Forest:
+
+```{r}
+library(randomForest)
+
+
+# Train Random Forest
+rf_model <- randomForest(
+  TARGET ~ Age + EXT_SOURCE_1 + EXT_SOURCE_2 +  EXT_SOURCE_3 + AMT_INCOME_TOTAL + CNT_CHILDREN + DAYS_EMPLOYED + AMT_CREDIT + AMT_ANNUITY + Per_Capita_Income + Credit_Duration_Ratio + Per_Capita_Loan + Loan_to_Credit_Score1 + Loan_to_Credit_Score2 + Loan_to_Credit_Score3 + DTI + EXT_SOURCE_1_Missing + EXT_SOURCE_2_Missing + EXT_SOURCE_3_Missing + All_EXT_Missing, 
+  data = train_set,
+  ntree = 500,       # Number of trees
+  mtry = 3,          # Number of features to consider at each split
+  importance = TRUE  # To calculate feature importance
+)
+
+# Predict probabilities
+rf_predictions <- predict(rf_model, newdata = test_set, type = "prob")[, 2]
+
+# Evaluate AUC
+roc_curve_rf <- roc(test_target, rf_predictions)
+auc_rf <- auc(roc_curve_rf)
+print(paste("Random Forest AUC:", auc_rf))
+
+# Feature importance
+varImpPlot(rf_model)
+
+plot(roc_curve_rf, main = "ROC Curve Random Forest added engineered features", col = "blue", lwd = 2)
+
+```
+
+If your dataset is large and Random Forest is already evaluated on a separate test set, cross-validation may not provide significantly different results and can be skipped to save computation time.
+
+-- Random Forest AUC: 0.712062010209949, has gone down
+
+Mean Decrease Accuracy:
+Measures how much a feature contributes to overall model accuracy. Features with high values indicate significant importance for predictions.
+Mean Decrease Gini:
+Reflects how much a feature contributes to reducing impurity in the splits of decision trees. Higher values indicate more informative features.
+
+Loan_to_Credit_Score2 and Loan_to_Credit_Score3: High contribution to model accuracy.
+EXT_SOURCE_2 and EXT_SOURCE_3: External credit scores are highly predictive.
+DTI (Debt-to-Income Ratio): Financial metric that explains default risk.
+Per_Capita_Income and Per_Capita_Loan: These engineered features are also contributing significantly.
+From Mean Decrease Gini (Right Plot):
+EXT_SOURCE_2: The most important feature based on reducing impurity.
+Loan_to_Credit_Score2 and Loan_to_Credit_Score3: Also crucial for reducing splits' impurity.
+Age: Age of the borrower has significant importance.
+Credit_Duration_Ratio and DTI: Help segment the data effectively in splits.
+
+
+Features to Prioritize
+The top features across both plots are:
+
+EXT_SOURCE_2: External credit score.
+Loan_to_Credit_Score2 and Loan_to_Credit_Score3: Loan-specific ratios.
+DTI: Debt-to-income ratio.
+Per_Capita_Income and Per_Capita_Loan: Useful engineered features.
+Age: Likely a strong demographic predictor.
+Credit_Duration_Ratio: Indicates the relationship between loan duration and creditworthiness.
+
+
+
+
+
+
+Explore XGBoost:
+XGBoost often outperforms Random Forest on tabular datasets, especially with careful tuning.
+
+Tune Hyperparameters: Focus on:
+max_depth: Maximum depth of trees.
+eta: Learning rate (step size shrinkage).
+nrounds: Number of boosting rounds.
+subsample: Fraction of data used for each tree.
+colsample_bytree: Fraction of features used for each tree.
+
+```{r}
+library(xgboost)
+
+# Convert character columns to factors
+train_set_B <- train_set
+test_set_B <- test_set
+
+train_set_B<- train_set_B %>%
+  mutate(across(where(is.character), as.factor))
+
+# Convert factor columns to numeric
+train_set_B <- train_set_B %>%
+  mutate(across(where(is.factor), as.numeric))
+
+# Convert TARGET to numeric
+train_set_B$TARGET <- as.numeric(as.character(train_set_B$TARGET)) - 1
+
+train_set_B <- train_set_B %>%
+  select(-SK_ID_CURR)
+
+
+non_numeric_cols <- names(test_set_B)[!sapply(test_set, is.numeric)]
+print(non_numeric_cols)
+
+test_set_B <- test_set_B %>%
+  mutate(across(where(is.character), as.factor))
+
+test_set_B <- test_set_B %>% select(-SK_ID_CURR)
+
+# Convert factors to numeric
+test_set_B <- test_set_B %>%
+  mutate(across(where(is.factor), as.numeric))
+```
+
+
+```{r}
+
+# Get feature names from train and test
+train_features <- colnames(train_set_B[, -which(names(train_set_B) == "TARGET")])
+test_features <- colnames(test_set_B)
+
+# Find missing and extra features
+missing_in_test <- setdiff(train_features, test_features)
+extra_in_test <- setdiff(test_features, train_features)
+
+# Add missing columns to test set
+for (col in missing_in_test) {
+  test_set_B[[col]] <- 0  # Add missing columns with default values (e.g., 0)
+}
+
+# Drop extra columns from test set
+test_set_B <- test_set_B[, train_features]
+
+
+print(colnames(train_set_B[, -which(names(train_set_B) == "TARGET")]))
+print(colnames(test_set_B))
+
+all(sapply(train_set_B[, -which(names(train_set_B) == "TARGET")], is.numeric))
+all(sapply(test_set_B, is.numeric))
+
+print(missing_in_test)
+
+
+train_features <- colnames(train_set_B[, -which(names(train_set_B) == "TARGET")])
+test_features <- colnames(test_set_B)
+
+# Compare feature names
+all.equal(train_features, test_features)
+```
+
+
+```{r}
+
+
+# Training data
+dtrain <- xgb.DMatrix(
+  data = as.matrix(train_set_B[, -which(names(train_set_B) == "TARGET")]), 
+  label = train_set_B$TARGET
+)
+
+# Test data
+dtest <- xgb.DMatrix(data = as.matrix(test_set_B))
+
+# Train XGBoost model
+xgb_model <- xgboost(
+  data = dtrain,
+  max_depth = 6,      # Depth of the tree
+  eta = 0.1,          # Learning rate
+  nrounds = 500,      # Number of boosting rounds
+  objective = "binary:logistic", # Binary classification
+  eval_metric = "auc",
+  subsample = 0.8,    # Row subsampling
+  colsample_bytree = 0.8 # Feature subsampling
+)
+
+# Predict probabilities
+xgb_predictions <- predict(xgb_model, newdata = dtest)
+
+# Evaluate AUC
+roc_curve_xgb <- roc(test_target, xgb_predictions)
+auc_xgb <- auc(roc_curve_xgb)
+print(paste("XGBoost AUC:", auc_xgb))
+
+plot(roc_curve_xgb, main = "ROC Curve XGBoost", col = "blue", lwd = 2)
+
+```
+
+
+
+
+Yes, your code uses all the features in train_set_B except for TARGET. Specifically:
+
+data = as.matrix(train_set_B[, -which(names(train_set_B) == "TARGET")]) ensures that all columns other than TARGET are included as predictors.
+If you have engineered features in train_set_B, they are also included in this training step.
+
+```{r}
+importance_matrix <- xgb.importance(feature_names = colnames(train_set_B[, -which(names(train_set_B) == "TARGET")]), model = xgb_model)
+xgb.plot.importance(importance_matrix)
+```
+^ get a better output for the presentation - include 
+
+Can we improve XGBoost with hyper parameter tuning?
+```{r}###
+train_set_B$TARGET <- as.factor(ifelse(train_set_B$TARGET == 1, "Yes", "No"))
+
+
+library(caret)
+xgb_grid <- expand.grid(
+  nrounds = c(100, 200, 500),
+  max_depth = c(4, 6, 8),
+  eta = c(0.01, 0.05, 0.1),
+  gamma = c(0, 1, 5),
+  colsample_bytree = c(0.6, 0.8, 1),
+  min_child_weight = c(1, 5, 10),
+  subsample = c(0.6, 0.8, 1)
+)
+
+train_control <- trainControl(method = "cv", number = 3, classProbs = TRUE, summaryFunction = twoClassSummary)
+
+xgb_tuned <- train(
+  TARGET ~ .,
+  data = train_set_B,
+  method = "xgbTree",
+  trControl = train_control,
+  tuneGrid = xgb_grid,
+  metric = "ROC"
+)
+```
+
+
+if that is taking too long : ^ took like 30-45 minutes so i stopped it. 
+
+Tip to Reduce Run Time:
+
+Use fewer values for some hyperparameters (e.g., nrounds or max_depth) during this run if time is a concern.
+Alternatively, consider random search to explore the hyperparameter space more quickly.
+Random Search Example:
+
+```{r}
+# Randomize a subset of the grid
+set.seed(123)
+random_grid <- xgb_grid %>%
+  sample_n(20)  # Select 20 random combinations from the grid
+
+# Train with the reduced grid
+xgb_tuned <- train(
+  TARGET ~ .,
+  data = train_set_B,
+  method = "xgbTree",
+  trControl = train_control,
+  tuneGrid = random_grid,
+  metric = "ROC"
+)
+
+print(xgb_tuned$bestTune)
+
+
+```
+
+^^ Yes, running this code is a great idea! By using random search to sample 20 random combinations from the hyperparameter grid, you significantly reduce the computational load while still exploring a diverse range of hyperparameter settings.
+
+Here’s why this approach is effective:
+
+Efficient Exploration: Random search allows you to test a subset of the hyperparameter space without exhaustively evaluating every combination.
+Time-Saving: Compared to the original grid, which could take a very long time, this approach drastically reduces training time.
+Good Performance: Random search is often as effective as exhaustive grid search because performance improvements are usually concentrated in specific regions of the hyperparameter space.
+
+
+
+
+XGboost with best parameters:
+
+```{r}
+# Train XGBoost model with tuned parameters
+xgb_model_tuned <- xgboost(
+  data = dtrain,
+  max_depth = 4,            # Depth of the tree (best parameter)
+  eta = 0.05,               # Learning rate (best parameter)
+  nrounds = 200,            # Number of boosting rounds (best parameter)
+  gamma = 1,                # Minimum loss reduction to make a split (best parameter)
+  colsample_bytree = 0.6,   # Feature subsampling (best parameter)
+  min_child_weight = 10,    # Minimum sum of instance weight (best parameter)
+  subsample = 0.8,          # Row subsampling (best parameter)
+  objective = "binary:logistic", # Binary classification
+  eval_metric = "auc"       # Evaluation metric
+)
+
+# Predict probabilities
+xgb_predictions_tuned <- predict(xgb_model_tuned, newdata = dtest)
+
+# Evaluate AUC
+roc_curve_xgb_tuned <- roc(test_target, xgb_predictions_tuned)
+auc_xgb_tuned <- auc(roc_curve_xgb_tuned)
+print(paste("XGBoost AUC with Tuned Parameters:", auc_xgb_tuned))
+
+# Plot ROC Curve
+plot(roc_curve_xgb_tuned, main = "ROC Curve XGBoost (Tuned Parameters)", col = "blue", lwd = 2)
+```
+
+XGBoost AUC with Tuned Parameters: 0.750989307097772"
+
+Accuracy:
+
+```{r}
+# Set the threshold (e.g., 0.5)
+threshold <- 0.5
+
+# Convert probabilities to binary predictions
+predicted_classes <- ifelse(xgb_predictions_tuned >= threshold, "Yes", "No")
+
+# Ensure `test_target` is a factor with the same levels as the predicted classes
+test_target <- factor(test_target, levels = c("No", "Yes"))
+
+# Create a confusion matrix
+confusion_matrix <- table(Predicted = predicted_classes, Actual = test_target)
+print("Confusion Matrix:")
+print(confusion_matrix)
+
+# Calculate accuracy
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+print(paste("Accuracy:", round(accuracy, 4)))
+
+# Optionally, calculate precision, recall, and F1-score
+precision <- confusion_matrix["Yes", "Yes"] / sum(confusion_matrix["Yes", ])
+recall <- confusion_matrix["Yes", "Yes"] / sum(confusion_matrix[, "Yes"])
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+print(paste("Precision:", round(precision, 4)))
+print(paste("Recall (Sensitivity):", round(recall, 4)))
+print(paste("F1-Score:", round(f1_score, 4)))
+prop.table(table(App_train$'TARGET'))
+
+19233/(206868+19233+366416)
+8.66 - 3.25
+
+```
+
+
+
+
+```{r}
+
+roc.test(roc_curve_xgb, roc_curve_xgb_tuned)
+
+```
+
+# plot both those curves together: 
+```{r}
+
+plot(roc_curve_xgb, main = "ROC Curve Comparison: Original vs Tuned", col = "red", lwd = 2)
+
+# Add the second ROC curve (tuned model)
+lines(roc_curve_xgb_tuned, col = "blue", lwd = 2)
+
+# Add a legend for clarity
+legend("bottomright", 
+       legend = c("Original XGBoost", "Tuned XGBoost"), 
+       col = c("red", "blue"), 
+       lwd = 2)
+
+```
+
+
+X Gboost with scale_pos_weight: 
+
+```{r}
+
+table(train_set_B$TARGET)
+train_set_B$TARGET <- ifelse(train_set_B$TARGET == "Yes", 1, 0)
+# Calculate scale_pos_weight
+scale_pos_weight <- sum(train_set_B$TARGET == 0) / sum(train_set_B$TARGET == 1)
+print(paste("Scale Pos Weight:", scale_pos_weight))
+```
+
+
+```{r}
+# Train XGBoost model with scale_pos_weight and best parameters
+xgb_model_weighted <- xgboost(
+  data = dtrain,
+  max_depth = 4,              # Best parameter from tuning
+  eta = 0.05,                 # Best parameter from tuning
+  nrounds = 200,              # Best parameter from tuning
+  gamma = 1,                  # Best parameter from tuning
+  colsample_bytree = 0.6,     # Best parameter from tuning
+  min_child_weight = 10,      # Best parameter from tuning
+  subsample = 0.8,            # Best parameter from tuning
+  scale_pos_weight = 5,  # Handle class imbalance
+  objective = "binary:logistic",        # Binary classification
+  eval_metric = "auc"                   # Evaluation metric
+)
+
+# Predict probabilities
+xgb_predictions_weighted <- predict(xgb_model_weighted, newdata = dtest)
+
+# Evaluate AUC
+roc_curve_xgb_weighted <- roc(test_target, xgb_predictions_weighted)
+auc_xgb_weighted <- auc(roc_curve_xgb_weighted)
+print(paste("XGBoost AUC with Scale Pos Weight:", auc_xgb_weighted))
+
+# Plot ROC Curve
+plot(roc_curve_xgb_weighted, main = "ROC Curve XGBoost (Weighted)", col = "darkgreen", lwd = 2)
+```
+AUC went down from that weighted model- 
+
+
+
+```{r}
+upsampled_data <- upSample(x= train_set[,-2], y = train_set$TARGET, yname = 'TARGET')
+
+#as.matrix(upsampled_data)
+table(upsampled_data$TARGET)
+```
+
+
+
+
+
+
+
+Why Use scale_pos_weight?
+Improves Class Balance: Adjusts the loss function to penalize misclassifications of the minority class (Default) more heavily.
+Better for Highly Imbalanced Data: It avoids over-representing the majority class during training without requiring upsampling or downsampling.
+
+
+Important Notes
+scale_pos_weight vs Upsampling:
+
+Use scale_pos_weight when your dataset is very large or upsampling is computationally expensive.
+Upsampling may slightly improve performance by giving the model more actual data to learn from.
+
+
+
+Upsampled data
+
+XGBoost model run again
+
+# Visualizations for the Presentation:
+
+```{r}
+
+# Plot the first ROC curve
+plot(roc_curve_model1, main = "ROC Curve Comparison", col = "purple", lwd = 2)
+
+# Add the glm with engineered features
+plot(roc_curve_model3, col = "lightblue", lwd = 2, add = TRUE)
+
+# random forest
+plot(roc_curve_rf, col = "green", lwd = 2, add = TRUE)
+
+#xgboost not tuned
+
+plot(roc_curve_xgb, col = "orange", lwd = 2, add = TRUE)
+
+
+#xgboost tuned
+plot(roc_curve_xgb_tuned, col = "red", lwd = 2, add = TRUE)
+
+
+# Add a legend to differentiate the curves
+legend("bottomright", 
+       legend = c("Baseline Model", "GLM with Engineered Features", "Random Forest Model", "XGBoost", "XGBoost with tuned parameters"), 
+       col = c("purple", "lightblue", "orange", "red"), 
+       lwd = 2)
+```
+
+
+
+```{r}
+# Convert importance matrix to a data frame
+importance_df <- as.data.frame(importance_matrix)
+top_features <- importance_df[1:25, ]
+
+
+# Plot using ggplot2
+ggplot(top_features, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  geom_text(aes(label = round(Gain, 3)), hjust = -0.3, size = 3) + # Adjust hjust and size as needed
+  labs(
+    title = "Feature Importance from XGBoost Model",
+    x = "Features",
+    y = "Feature Importance Score (Gain)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.margin = margin(10, 20, 10, 20), # Expand margins
+    axis.text.y = element_text(size = 10), # Adjust text size for clarity
+    axis.text.x = element_text(size = 8)  # Adjust text size for clarity
+  )
+
+# Save the plot
+ggsave("feature_importance_plot.png", width = 12, height = 8, dpi = 300)
+```
+
+
+```{r}
+# Save the plot to a high-resolution PNG file
+png("roc_curve_comparison_high_res.png", width = 1600, height = 1200, res = 300)
+
+# Plot the first ROC curve
+plot(roc_curve_model1, main = "ROC Curve Comparison", col = "purple", lwd = 2)
+
+# Add the glm with engineered features
+plot(roc_curve_model3, col = "lightblue", lwd = 2, add = TRUE)
+
+# Add the random forest model
+plot(roc_curve_rf, col = "green", lwd = 2, add = TRUE)
+
+# Add the xgboost not tuned
+plot(roc_curve_xgb, col = "orange", lwd = 2, add = TRUE)
+
+# Add the xgboost tuned
+plot(roc_curve_xgb_tuned, col = "red", lwd = 2, add = TRUE)
+
+# Add a legend to differentiate the curves
+legend(
+  "bottomright", 
+  legend = c("Baseline Model", "GLM with Engineered Features", "Random Forest Model", "XGBoost", "XGBoost with Tuned Parameters"), 
+  col = c("purple", "lightblue", "green", "orange", "red"), 
+  lwd = 2,
+  cex = 0.8, # Reduce text size
+  bty = "n" # Remove the box around the legend
+)
+
+# Close the device
+dev.off()
+```
+
+```{r}
+importance_matrix_2 <- xgb.importance(feature_names = colnames(train_set_B[, -which(names(train_set_B) == "TARGET")]), model = xgb_model_tuned)
+xgb.plot.importance(importance_matrix_2)
+```
+
+```{r}
+# Convert importance matrix to a data frame
+importance_df_2 <- as.data.frame(importance_matrix_2)
+top_features <- importance_df_2[1:6, ]
+
+# Plot using ggplot2
+ggplot(top_features, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_bar(stat = "identity", fill = "royalblue3") +
+  coord_flip() +
+  geom_text(aes(label = round(Gain, 3)), hjust = -0.3, size = 4, fontface = "bold") + # Adjust text size and make bold
+  labs(
+    title = "Feature Importance from XGBoost Model",
+    x = "Features",
+    y = "Feature Importance Score (Gain)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.margin = margin(10, 20, 10, 20), # Expand margins
+    axis.text.y = element_text(size = 12, face = "bold"), # Bold Y-axis labels
+    axis.text.x = element_text(size = 10, face = "bold"), # Bold and adjust size for X-axis labels
+    panel.grid.major = element_blank(),   # Remove major gridlines
+    panel.grid.minor = element_blank()    # Remove minor gridlines
+  )
+
+# Save the plot
+ggsave("feature_importance_plot.png", width = 12, height = 8, dpi = 300)
+```
+
+
+
+
+```{r}
+# Convert importance matrix to a data frame
+importance_df <- as.data.frame(importance_matrix)
+top_features <- importance_df[1:6, ]
+
+# Plot using ggplot2
+ggplot(top_features, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_bar(stat = "identity", fill = "royalblue3") +
+  coord_flip() +
+  geom_text(aes(label = round(Gain, 3)), hjust = -0.3, size = 4, fontface = "bold") + # Adjust text size and make bold
+  labs(
+    title = "Feature Importance from XGBoost Model",
+    x = "Features",
+    y = "Feature Importance Score (Gain)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.margin = margin(10, 20, 10, 20), # Expand margins
+    axis.text.y = element_text(size = 12, face = "bold"), # Bold Y-axis labels
+    axis.text.x = element_text(size = 10, face = "bold"), # Bold and adjust size for X-axis labels
+    panel.grid.major = element_blank(),   # Remove major gridlines
+    panel.grid.minor = element_blank()    # Remove minor gridlines
+  )
+
+# Save the plot
+ggsave("feature_importance_plot.png", width = 12, height = 8, dpi = 300)
+```
+
+
+
+
+
+### KAGGLE SCORE
+
+```{r}
+# Load test data
+Kaggle_test <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/application_test.csv")
+
+# Save IDs before making changes to Kaggle_test
+Kaggle_test_ids <- Kaggle_test$SK_ID_CURR
+```
+
+```{r}
+# Replace extreme values instead of filtering
+Kaggle_test$DAYS_EMPLOYED[Kaggle_test$DAYS_EMPLOYED == 365243] <- NA
+Kaggle_test$DAYS_EMPLOYED <- abs(Kaggle_test$DAYS_EMPLOYED)
+```
+
+```{r}
+# Feature engineering
+Kaggle_test <- Kaggle_test %>%
+  select(all_of(c("EXT_SOURCE_1")), where(~ mean(is.na(.)) <= 0.48)) %>%
+  mutate(
+    Age = -DAYS_BIRTH / 365,
+    EXT_SOURCE_1 = ifelse(is.na(EXT_SOURCE_1), median(App_train$EXT_SOURCE_1, na.rm = TRUE), EXT_SOURCE_1),
+    EXT_SOURCE_2 = ifelse(is.na(EXT_SOURCE_2), median(App_train$EXT_SOURCE_2, na.rm = TRUE), EXT_SOURCE_2),
+    EXT_SOURCE_3 = ifelse(is.na(EXT_SOURCE_3), median(App_train$EXT_SOURCE_3, na.rm = TRUE), EXT_SOURCE_3),
+    DTI = AMT_CREDIT / AMT_INCOME_TOTAL,
+    Loan_to_Credit_Score1 = AMT_CREDIT / EXT_SOURCE_1,
+    Loan_to_Credit_Score2 = AMT_CREDIT / EXT_SOURCE_2,
+    Loan_to_Credit_Score3 = AMT_CREDIT / EXT_SOURCE_3,
+    Annuity_to_Income_Ratio = AMT_ANNUITY / AMT_INCOME_TOTAL,
+    Credit_Duration_Ratio = AMT_CREDIT / AMT_ANNUITY,
+    Per_Capita_Income = AMT_INCOME_TOTAL / CNT_FAM_MEMBERS,
+    Per_Capita_Loan = AMT_CREDIT / CNT_FAM_MEMBERS
+  )
+```
+
+
+```{r}
+# Align features with the training set
+Kaggle_test <- Kaggle_test[, colnames(train_set_B[, -which(names(train_set_B) == "TARGET")])]
+
+
+
+```
+
+```{r}
+# Columns in train_set_B (excluding TARGET)
+train_features <- colnames(train_set_B[, -which(names(train_set_B) == "TARGET")])
+
+# Columns in Kaggle_test
+test_features <- colnames(Kaggle_test)
+
+# Identify missing and extra columns
+missing_in_test <- setdiff(train_features, test_features)
+extra_in_test <- setdiff(test_features, train_features)
+
+# Print the results
+cat("Missing in Kaggle_test:\n", missing_in_test, "\n")
+cat("Extra in Kaggle_test:\n", extra_in_test, "\n")
+
+```
+
+
+```{r}
+Kaggle_test <- Kaggle_test %>%
+  mutate(
+    All_EXT_Missing = ifelse(is.na(EXT_SOURCE_1) & is.na(EXT_SOURCE_2) & is.na(EXT_SOURCE_3), 1, 0),
+    EXT_SOURCE_1_Missing = ifelse(is.na(EXT_SOURCE_1), 1, 0),
+    EXT_SOURCE_2_Missing = ifelse(is.na(EXT_SOURCE_2), 1, 0),
+    EXT_SOURCE_3_Missing = ifelse(is.na(EXT_SOURCE_3), 1, 0)
+  )
+```
+
+```{r}
+# Remove extra columns from Kaggle_test
+Kaggle_test <- Kaggle_test[, train_features]
+
+Kaggle_test <- Kaggle_test[, colnames(train_set_B[, -which(names(train_set_B) == "TARGET")])]
+
+```
+
+
+```{r}
+# Convert character columns to factors and then to numeric
+Kaggle_test <- Kaggle_test %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  mutate(across(where(is.factor), as.numeric))
+
+# Convert to DMatrix
+Kaggle_test_matrix <- xgb.DMatrix(data = as.matrix(Kaggle_test))
+```
+
+
+```{r}
+# Predict probabilities
+kaggle_predictions <- predict(xgb_model_tuned, newdata = Kaggle_test_matrix)
+```
+
+
+```{r}
+# Ensure alignment
+submission <- data.frame(SK_ID_CURR = Kaggle_test_ids, TARGET = kaggle_predictions)
+
+# Save submission file
+write.csv(submission, "submission.csv", row.names = FALSE)
+```
+
+
+
+
+

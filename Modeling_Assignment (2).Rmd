@@ -1,0 +1,671 @@
+---
+title: "Modeling"
+author: "Madalyn Young, Imogen Holdsworth, Tyler Swanson"
+date: "2024-11-03"
+output:
+  html_document:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Contents"
+    toc_float:
+      position: "left"
+execute:
+  warning: false
+  message: false
+---
+
+```{r echo = FALSE, warning=FALSE}
+pacman::p_load(caret, psych, rpart, rpart.plot, rJava, RWeka, rminer, matrixStats, knitr, tictoc, tidyverse, dplyr, ggplot2, randomForest, DMWR, pROC, gridExtra, xgboost)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+App_train <- read.csv("home-credit-default-risk//application_train.csv") 
+#App_test <-  read.csv("home-credit-default-risk//application_test.csv") 
+
+App_train2 <- read.csv("home-credit-default-risk//application_train.csv") 
+```
+
+```{r}
+#clean up App_Train
+App_train <- App_train %>% 
+  select(where(~ mean(is.na(.)) <= 0.57)) %>% 
+  filter(AMT_INCOME_TOTAL <= 2000000) %>% #42 people default between 1M and 2M 
+  filter(CNT_CHILDREN <= 15) %>% 
+  mutate(Age = -DAYS_BIRTH/365)
+
+App_train$TARGET <- as.factor(App_train$TARGET)
+```
+
+
+```{r include = FALSE}
+# Task 3
+
+#**WE DID NOT DO THE DEBT TO INCOME OR LOAN AMOUNT/CREDIT SCORE. DO WE WANT TO BEFORE SUNDAY?
+
+#Divide loan amount by credit score
+  # it can also scale the loan amounts if we divide it by loan amount (a large loan for someone with a low score might signal higher default)
+  
+#calculate debt to income ratio
+
+```
+
+# Task 1
+**Set up a training set and a validation set using application_train.csv data set to do cross-validation.  Alternatively you could perform cross-validation using a different framework, such as k-fold cross validation as implemented in modeling packages such as caret or tidymodels or scikit-learn. The model performance that matters, of course, is the estimated performance on the test set as well as the Kaggle score.**
+
+```{r}
+set.seed(123)
+
+#keep at 10% because the data set is large
+inTrain <- createDataPartition(App_train$TARGET, p = .1, list = FALSE)
+
+
+train_set <- App_train[inTrain,]
+test_set <- App_train[-inTrain,]
+
+test_target <- App_train[-inTrain,2]
+
+
+```
+
+
+# Task 2
+**Identify the performance benchmark established by the majority class classifier.**
+
+```{r}
+prop.table(table(App_train$'TARGET'))
+```
+
+
+If we just went off the majority classifier to predict if someone would default, they would not 91.92% of the time. The performance benchmark is 91.92%.
+
+# Task 3
+**Fit several different logistic regression models using different predictors. Do interaction terms improve the model?  Compare model performance using not just accuracy but also AUC.**
+
+```{r}
+glmModel1 <- glm(TARGET~ 1, family = binomial, data = train_set)
+
+summary(glmModel1)
+```
+
+```{r}
+prob <- exp(coef(glmModel1)[1]) / (1 + exp(coef(glmModel1)[1]))
+prob
+```
+
+
+The odds of the target being one are 0.079. The negative intercept shows that there are low likelihood of the target being 1
+
+```{r}
+
+predictions1 <- predict(glmModel1, newdata = test_set, type = "response")
+summary(predictions1)
+
+##All thses are returning null???
+mmetric(test_target, predictions1, metric = c("ACC"))
+
+```
+Just using the target gets us to 91.93
+
+```{r}
+glmModel2 <- glm(TARGET~Age + EXT_SOURCE_1 + EXT_SOURCE_2 +  EXT_SOURCE_3 + AMT_INCOME_TOTAL + CNT_CHILDREN + DAYS_EMPLOYED + AMT_CREDIT + AMT_ANNUITY, family = binomial, data = train_set)
+
+summary(glmModel2)
+```
+The older you get the less likely you are to default
+
+Total income is not significant in this model.
+
+All these effects have a low impact
+
+```{r}
+predictions2 <- predict(glmModel2, newdata = test_set, type = "response")
+summary(predictions2)
+
+
+predictions2 <- ifelse(predictions2>0.5,1,0)
+confusionMatrix(factor(predictions2),factor(test_target))
+```
+The accuracy increased to 92.74. 
+
+```{r}
+#adding two interaction terms
+#1 - age*amt_income
+#2amt_income* cnt_children (not family members to stay consistent with the above)
+glmModel3 <- glm(TARGET~ EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + Age*AMT_INCOME_TOTAL + AMT_INCOME_TOTAL*CNT_CHILDREN + DAYS_EMPLOYED + AMT_CREDIT + AMT_ANNUITY, family = binomial, data = train_set)
+
+summary(glmModel3)
+```
+Interaction terms are not significant. The terms are not really significant on their own.
+
+
+
+```{r}
+predictions3 <- predict(glmModel3, newdata = test_set, type = "response")
+summary(predictions3)
+
+
+predictions3 <- ifelse(predictions3>0.5,1,0)
+confusionMatrix(factor(predictions3),factor(test_target))
+```
+accuracy increases to 92.75, which is not much better. The interaction terms are not significant predictors on their own. So accuracy might be going up because there are more predictors and R2 is going up and therefore the model is overfitting.
+
+<u> Area Under the Curve </u>
+```{r}
+# Compute ROC curve and AUC
+roc_curve_simple <- roc(test_target, predictions1)
+
+auc_value_simple <- auc(roc_curve_simple)
+
+# Print the AUC value
+cat("AUC for a simple glm:", auc_value_simple, "\n")
+
+```
+
+```{r}
+
+
+# Compute ROC curve and AUC
+roc_curve_with_features <- roc(test_target, predictions2)
+auc_value_with_features <- auc(roc_curve_with_features)
+
+# Print the AUC value
+cat("AUC with Features:", auc_value_with_features, "\n")
+
+
+```
+
+```{r}
+roc_curve_interactions <- roc(test_target, predictions3)
+auc_value_interactions <- auc(roc_curve_interactions)
+
+# Print the AUC value
+cat("AUC with Interaction Terms:", auc_value_interactions, "\n")
+```
+
+
+
+```{r}
+# compare the plots for AUC for all models so far: 
+
+# Create ROC plots for each model
+
+# Simple model ROC plot
+roc_plot_simple <- ggplot() +
+  geom_line(aes(x = 1 - roc_curve_simple$specificities, y = roc_curve_simple$sensitivities), color = "blue") +
+  geom_abline(linetype = "dashed", color = "gray") +
+  labs(title = paste("Simple Model ROC (AUC =", round(auc(roc_curve_simple), 3), ")"), x = "1 - Specificity", y = "Sensitivity") +
+  theme_minimal()
+
+# Model with terms ROC plot
+roc_plot_terms <- ggplot() +
+  geom_line(aes(x = 1 - roc_curve_with_features$specificities, y = roc_curve_with_features$sensitivities), color = "green") +
+  geom_abline(linetype = "dashed", color = "gray") +
+  labs(title = paste("Model with Terms ROC (AUC =", round(auc(roc_curve_with_features), 3), ")"), x = "1 - Specificity", y = "Sensitivity") +
+  theme_minimal()
+
+# Model with interaction terms ROC plot
+roc_plot_interactions <- ggplot() +
+  geom_line(aes(x = 1 - roc_curve_interactions$specificities, y = roc_curve_interactions$sensitivities), color = "red") +
+  geom_abline(linetype = "dashed", color = "gray") +
+  labs(title = paste("Model with Interactions ROC (AUC =", round(auc(roc_curve_interactions), 3), ")"), x = "1 - Specificity", y = "Sensitivity") +
+  theme_minimal()
+
+
+grid.arrange(roc_plot_simple, roc_plot_terms, roc_plot_interactions, ncol = 1)
+
+```
+
+
+# Task 4
+**Explore using algorithms like random forest and gradient boosting. Compare model performance.**
+
+```{r}
+
+rfModel1 <- randomForest(TARGET~ Age+ EXT_SOURCE_1+ EXT_SOURCE_2+ EXT_SOURCE_3+ AMT_INCOME_TOTAL+ CNT_CHILDREN+ DAYS_EMPLOYED+  AMT_CREDIT+ AMT_ANNUITY,
+                         data = train_set, ntree = 500, na.action = na.omit)
+
+rfModel1
+```
+
+```{r}
+rfModel1Preds <- predict(rfModel1, newdata = test_set, type = "response")
+
+summary(rfModel1Preds)
+
+confusionMatrix(rfModel1Preds,factor(test_target))
+```
+
+Accuracy is 92.69
+
+
+```{r}
+
+# simple imputation of missing data for random forest 
+
+train_df_imputed <- train_set
+for (var in names(train_df_imputed)) {
+  if (is.numeric(train_df_imputed[[var]])) {
+    train_df_imputed[[var]][is.na(train_df_imputed[[var]])] <- median(train_df_imputed[[var]], na.rm = TRUE)
+  }
+}
+
+# random forest model
+
+rf_model <- randomForest(TARGET ~ ., data = train_df_imputed, importance = TRUE, ntree = 50)
+
+# order the importance from highest to lowest
+
+importance_df <- as.data.frame(importance(rf_model))
+importance_df <- importance_df[order(-importance_df$MeanDecreaseGini), ]
+print(importance_df)
+```
+
+```{r}
+#RF based on the top 10 what it says are the best feature above (excluding SK_ID)
+
+rfModel2 <- randomForest(TARGET~ Age+ EXT_SOURCE_2+ EXT_SOURCE_3+ DAYS_ID_PUBLISH + DAYS_REGISTRATION + DAYS_EMPLOYED + DAYS_BIRTH + AMT_ANNUITY + DAYS_LAST_PHONE_CHANGE,
+                         data = train_set, ntree = 500, na.action = na.omit)
+
+rfModel2
+
+```
+
+```{r}
+rfModel2Preds <- predict(rfModel2, newdata = test_set, type = "response")
+
+summary(rfModel2Preds)
+
+confusionMatrix(rfModel2Preds,factor(test_target))
+```
+Predicting a lot more true positive. Accuracy is lower overall though. We might want this over higher accuracy though because the true postives are costly and what we want to identify.
+
+# Task 5
+**Perform the data transformations required by a given algorithm.  For example, some algorithms require numeric data and perform better when it has been standardized or normalized. **
+
+```{r}
+
+# resplit the data at the same seed, SVM requires TARGET to be numeric
+
+app_train_imogen <- App_train |>
+  filter(!(is.na(EXT_SOURCE_1) & is.na(EXT_SOURCE_2) & is.na(EXT_SOURCE_3)))
+
+set.seed(123)
+
+# 10 % split
+train_indices_imogen <- createDataPartition(app_train_imogen$TARGET, p = 0.1, list = FALSE)
+train_data_SVM <- app_train_imogen[train_indices_imogen, ] 
+test_data_SVM  <- app_train_imogen[-train_indices_imogen, ] 
+
+prop.table(table(train_data_SVM$TARGET))
+prop.table(table(test_data_SVM$TARGET))
+
+# Separate features and target for the training set
+train_features_SVM <- train_data_SVM |>
+  select(-TARGET)  # Remove the TARGET column
+train_target_SVM <- train_data_SVM$TARGET  # Store only the TARGET column
+
+# Separate features and target for the test set
+test_features_SVM <- test_data_SVM |> select(-TARGET)  # Remove the TARGET column
+test_target_SVM <- test_data_SVM$TARGET  # Store only the TARGET column
+
+head(train_data_SVM)
+
+str(train_data_SVM$TARGET)
+str(train_data_SVM$SK_ID_CURR)
+
+any(is.na(train_data_SVM[, -c(1, 2)])) 
+
+
+```
+SVM models do not perform very well on highly correlated data, as our data includes highly correlated terms, the SVM model may not perform well. 
+
+```{r}
+
+# Correlation matrix: 
+
+#requires numeric variables 
+str(train_data_SVM$TARGET)
+str(train_data_SVM$SK_ID_CURR)
+
+# deal with NA's
+numeric_train_no_missing <- train_data_SVM[, -c(1, 2)]
+numeric_train_no_missing <- numeric_train_no_missing[, sapply(numeric_train_no_missing, is.numeric)]
+
+corr_matrix <- cor(numeric_train_no_missing, use = "complete.obs")
+
+
+corr_table <-as.data.frame(as.table(corr_matrix))
+
+# remove the self correlations 
+
+corr_table <- corr_table[corr_table$Var1 != corr_table$Var2, ]
+
+# sort by the absolute value of the correlation
+corr_table <- corr_table[order(abs(corr_table$Freq), decreasing = TRUE), ]
+
+#  top 20 correlations using 
+kable(head(corr_table, 20), caption = "Top 20 Non-Self Correlations in the Trainin Dataset")
+
+
+```
+```{r}
+#Explore linear seperability
+
+train_data_SVM$TARGET <- as.factor(train_data_SVM$TARGET)
+
+# plot different combinations of variables to explore linear separability
+
+# Income vs Credit amounts plot
+ggplot(train_data_SVM, aes(x = AMT_INCOME_TOTAL, y = AMT_CREDIT, color = TARGET)) +
+  geom_point(size = 2) +
+  labs(title = "Income vs Credit", x = "AMT_INCOME_TOTAL", y = "AMT_CREDIT") +
+  theme_minimal()
+
+# days employed vs Credit Score
+
+# days employed is a negative value to indicate the number of days back from the application date one was employed
+train_data_SVM$DAYS_EMPLOYED <- abs(train_data_SVM$DAYS_EMPLOYED) # fix the negatives by taking absolute value
+
+ggplot(train_data_SVM, aes(x = DAYS_EMPLOYED, y = EXT_SOURCE_2, color = TARGET)) +
+  geom_point(size = 2) +
+  labs(title = "Days emplopyed vs Credit Score", x = "DAYS_EMPLOYED", y = "EXT_SOURCE_2") +
+  theme_minimal()
+```
+
+These plots indicate that there is not a large amount of linear separability in the data, this means that a linear SVM model may not be the best route, and we should explore the performance of a radial model. 
+
+
+```{r}
+## DUMMY ENCODING:
+
+# combine features from both training and test sets (only temp to ensure dummyfying is even across train and test sets)
+combined_features <- rbind(train_features_SVM, test_features_SVM)
+
+# dummy encode data
+dummies <- dummyVars(~ ., data = combined_features)
+combined_features_encoded <- as.data.frame(predict(dummies, newdata = combined_features))
+
+# split back into train and test sets
+train_features_encoded <- combined_features_encoded[1:nrow(train_features_SVM), ]
+test_features_encoded <- combined_features_encoded[(nrow(train_features_SVM) + 1):nrow(combined_features_encoded), ]
+
+# scale across with the training set
+scales <- preProcess(train_features_encoded, method = c("center", "scale"))
+
+# Apply scaling to both the training and test encoded features
+train_features_scaled <- predict(scales, train_features_encoded)
+test_features_scaled <- predict(scales, test_features_encoded)
+
+
+```
+
+Using dummies_train for both train_features and test_features ensures that the dummy variables are consistent across both datasets. 
+
+
+
+```{r}
+
+# Combine train features and target
+train_data_combined <- cbind(train_features_scaled, TARGET = train_target_SVM)
+
+# Combine test features and target
+test_data_combined <- cbind(test_features_scaled, TARGET = test_target_SVM)
+
+# remove NA's in the combined training data
+train_data_clean <- na.omit(train_data_combined)
+
+# remove NAs in the combined test data
+test_data_clean <- na.omit(test_data_combined)
+
+# split back into features and target 
+train_features_scaled <- train_data_clean[, -ncol(train_data_clean)]  # All columns except last
+train_target_SVM <- train_data_clean$TARGET                               # Last column
+
+# split back into features and target 
+test_features_scaled <- test_data_clean[, -ncol(test_data_clean)]     # All columns except last
+test_target_SVM <- test_data_clean$TARGET  
+
+# make sure the data is the same size and no errors were created in the scaling/centering
+nrow(train_features_scaled) == length(train_target_SVM) 
+nrow(test_features_scaled) == length(test_target_SVM)
+
+
+train_data_final_SVM <- cbind(train_features_scaled, TARGET = train_target_SVM)
+
+```
+
+
+Model a radial SVM on the set of features we used for the glmmodel 2
+
+```{r}
+# Select only the desired features in the training and test sets
+selected_features <- c("AMT_INCOME_TOTAL", "AMT_CREDIT", "EXT_SOURCE_1","EXT_SOURCE_2", "EXT_SOURCE_3","CNT_CHILDREN","DAYS_EMPLOYED", "Age","AMT_ANNUITY" )  # Specify your chosen features
+
+train_features_selected <- train_features_scaled[, selected_features]
+test_features_selected <- test_features_scaled[, selected_features]
+
+train_data_selected <- cbind(train_features_selected, TARGET = train_target_SVM)
+
+head(train_data_selected)
+
+
+```
+
+
+
+```{r}
+
+train_data_selected$TARGET <- factor(train_data_selected$TARGET, levels = c(0, 1), labels = c("No", "Yes"))
+
+# Define your trainControl and grid if you haven’t already
+fitControl <- trainControl(
+  method = "repeatedcv",
+  number = 4,
+  repeats = 2,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE
+)
+
+grid <- expand.grid(sigma = c(0.01, 0.05), C = c(0.05, 0.75, 1, 1.5, 2))
+
+# Train the radial SVM model using only the selected features
+svmFitRadial_selected <- train(
+  TARGET ~ ., data = train_data_selected,
+  method = "svmRadial",
+  trControl = fitControl,
+  metric = "ROC",
+  tuneGrid = grid,
+  verbose = FALSE
+)
+
+```
+
+
+```{r}
+
+print(svmFitRadial_selected)
+
+# Make predictions on the test set with only the selected features
+
+svm_radial_predictions_selected <- predict(svmFitRadial_selected, test_features_selected)
+
+test_target_SVM <- factor(test_target_SVM, levels = c(0, 1), labels = c("No", "Yes"))
+
+# Evaluate the model
+confusionMatrix(svm_radial_predictions_selected, test_target_SVM)
+
+
+```
+
+model is not producing any true positives, it suggests that it might be overly biased toward predicting the negative class. This could happen due to class imbalance, poor hyper-parameter tuning, or the model simply not finding enough distinguishing features for the positive class. 
+
+We could look at running the model on the upsampled data, or just sticking with improving the RandomForest model, as those models tend to handle class imbalance and outliers better.
+
+# Task 6 
+**Experiment with upsampling and downsampling the data to adjust for the imbalanced target variable.  (See APM Ch. 16.)  Does this strategy this improve model performance?**
+
+```{r}
+upsampled_data <- upSample(x= train_set[,-2], y = train_set$TARGET, yname = 'TARGET')
+
+#as.matrix(upsampled_data)
+table(upsampled_data$TARGET)
+```
+
+```{r}
+glmModelUP <- glm(TARGET~1, family = binomial, data = upsampled_data)
+
+summary(glmModelUP)
+```
+
+
+
+```{r}
+#  model on upsampled data
+
+glm_model_with_features_upsampled <- glm(
+  TARGET ~ AMT_INCOME_TOTAL + AMT_CREDIT + EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + CNT_CHILDREN + DAYS_EMPLOYED + Age + AMT_ANNUITY,
+  data = upsampled_data,  
+  family = binomial
+)
+
+# predictions on the test set
+predictions_with_features_upsampled <- predict(glm_model_with_features_upsampled, newdata = test_set, type = "response")
+
+# convert probabilities to class labels (0 or 1) using a threshold of 0.55
+predicted_class_with_features_upsampled <- ifelse(predictions_with_features_upsampled > 0.55, 1, 0)
+predicted_class_with_features_upsampled <- factor(predicted_class_with_features_upsampled, levels = c("0", "1"))
+levels(predicted_class_with_features_upsampled)
+
+
+
+table(Predicted = predicted_class_with_features_upsampled, Actual = test_set$TARGET)
+
+summary(glm_model_with_features_upsampled)
+
+```
+Accuracy has not improved on the logistic model with features for the upsampled data
+
+```{r}
+#RF based on the top 10 what it says are the best feature above (excluding SK_ID)
+
+rfModelUP <- randomForest(TARGET~ Age+ EXT_SOURCE_2+ EXT_SOURCE_3+ DAYS_ID_PUBLISH + DAYS_REGISTRATION + DAYS_EMPLOYED + DAYS_BIRTH + AMT_ANNUITY + DAYS_LAST_PHONE_CHANGE,
+                         data = upsampled_data, ntree = 500, na.action = na.omit)
+
+rfModelUP
+
+```
+
+```{r}
+rfModelUPPreds <- predict(rfModelUP, newdata = test_set, type = "response")
+
+summary(rfModelUPPreds)
+
+confusionMatrix(rfModelUPPreds,factor(test_target))
+```
+Accuracy actually went down for random forest on the upsampled data. barely better than the majority class.
+
+
+We do not want to downsample this dataset since there are already so few default observations.
+
+# Task 7
+**Try combining model predictions--this is called an ensemble model--to improve performance.**
+
+The assemble model showed a slight improvement with an accuracy of 92.7%. Similar to the other models, sensitivity was high across the board with all models effectively identifying non-default cases. Specificity continued to be low for the ensemble model making it difficult to identify default cases. Overall the ensemble model slightly outperforms the other models.  
+
+
+```{r}
+# Generate binary predictions from glmModelUP
+glm_binary <- ifelse(predictions2 > 0.5, 1, 0)
+
+
+# Convert rfModel1Preds to numeric if it's a factor of binary predictions
+rf_binary <- as.numeric(as.character(rfModel2Preds))
+
+
+# Re-calculate ensemble predictions using valid glm_binary and rf_binary
+ensemble_preds <- as.integer(glm_binary + rf_binary >= 1)
+ensemble_preds <- factor(ensemble_preds, levels = c(0, 1))
+
+
+# Run confusion matrix to evaluate ensemble model
+confusionMatrix(ensemble_preds, test_target)
+
+
+```
+  
+
+
+# Task 8
+**Try additional feature engineering to boost model performance. Can you combine variables or bin numeric variables?  Explore the notebooks at Kaggle for data transformation ideas. In particular, use the other data sets at Kaggle--beyond the application data--to create additional features.**
+
+The feature-engineered model again showed a slight improvement compared to previous models with an accuracy of 0.9275%. It effectively identifies non-default cases, but specificity is still low so it isn't great for detecting defaults.  
+
+
+```{r}
+# Prepare data
+App_train <- App_train %>%
+  mutate(Debt_to_Income_Ratio = AMT_CREDIT / AMT_INCOME_TOTAL, # Debt-to-Income Ratio feature
+         Age_Income_Interaction = Age * AMT_INCOME_TOTAL,      # Age and Income Interaction
+         Age_Bin = case_when(                                  # Categorize Bin Age
+           Age < 25 ~ "Under 25",
+           Age >= 25 & Age < 40 ~ "25-40",
+           Age >= 40 & Age < 60 ~ "40-60",
+           Age >= 60 ~ "60+"),
+         Income_Bin = case_when(                               # Categorize Income  
+           AMT_INCOME_TOTAL < 40000 ~ "Low Income",
+           AMT_INCOME_TOTAL >= 40000 & AMT_INCOME_TOTAL < 180000 ~ "Medium Income",
+           AMT_INCOME_TOTAL >= 180000 ~ "High Income")) %>%
+  mutate(Age_Bin = as.factor(Age_Bin),                         # Convert categorical bins to factors
+         Income_Bin = as.factor(Income_Bin))
+
+
+# Review
+summary(App_train)
+
+
+# Fit model with new features
+glmModel4 <- glm(TARGET ~ EXT_SOURCE_1 + EXT_SOURCE_2 + EXT_SOURCE_3 + Debt_to_Income_Ratio + 
+                 Age_Income_Interaction + Age_Bin + Income_Bin, 
+                 family = binomial, data = App_train)
+
+
+# Model Summary - Evaluation 
+summary(glmModel4)
+
+
+# Update test_set has features to match App_train
+test_set <- test_set %>%
+  mutate(Debt_to_Income_Ratio = AMT_CREDIT / AMT_INCOME_TOTAL,
+         Age_Income_Interaction = Age * AMT_INCOME_TOTAL,
+         Age_Bin = case_when(
+           Age < 25 ~ "Under 25",
+           Age >= 25 & Age < 40 ~ "25-40",
+           Age >= 40 & Age < 60 ~ "40-60",
+           Age >= 60 ~ "60+"
+         ),
+         Income_Bin = case_when(
+           AMT_INCOME_TOTAL < 40000 ~ "Low Income",
+           AMT_INCOME_TOTAL >= 40000 & AMT_INCOME_TOTAL < 180000 ~ "Medium Income",
+           AMT_INCOME_TOTAL >= 180000 ~ "High Income"
+         )) %>%
+  mutate(Age_Bin = as.factor(Age_Bin),
+         Income_Bin = as.factor(Income_Bin))
+
+
+# test set predictions
+glmModel4Preds <- predict(glmModel4, newdata = test_set, type = "response")
+
+
+# Convert predictions to binary 
+predicted_classes <- ifelse(glmModel4Preds > 0.5, 1, 0)
+
+
+# Run confusion matrix to evaluate glmModel4Preds 
+confusionMatrix(factor(predicted_classes), factor(test_set$TARGET))
+```
+
+
+
+

@@ -1,0 +1,602 @@
+---
+title: "EDA"
+author: "Imogen Holdsworth" 
+date: "2024-09-20"
+output: 
+  html_document: 
+    code_folding: hide  
+    number_sections: no
+    toc: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Introduction: 
+
+Home Credit aims to promote financial inclusion by offering accessible loans to customers with limited or no formal credit history. To achieve this, Home Credit must accurately assess default risk, ensuring that loans are responsibly distributed without increasing risk exposure. This project seeks to leverage client data—such as demographics, loan history, and behavior—to develop a model that predicts the likelihood of default. The solution will improve risk management, reduce losses, expand the company’s market reach, and enhance customer experience, all while ensuring higher model accuracy measured by the ROC curve.
+
+This analysis includes the following data sources:
+
+The application data (split into test and train- where the test data does not contain the target variable). This includes static data on all the applicants, where each row is one loan. 
+
+The prior application data includes data on the previous applications for Home Credit loans of clients who have loans in the sample, there is one row for each previous application related to loans in the data set.
+
+## Data and package load
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(warning = FALSE)
+
+pacman::p_load(ggplot2, dplyr, skimr, corrplot, tidyverse, knitr, janitor, randomForest)
+
+app_train <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/application_train.csv")
+
+app_test <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/application_test.csv")
+
+prior_app <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/previous_application.csv")
+
+bureau <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/bureau.csv")
+
+dd <- read.csv("/Users/u0847758/Desktop/School/home-credit-default-risk/HomeCredit_columns_description.csv")
+```
+
+# Application Data:
+
+The following section will explore the application data, for both the test and train groups. The goal is to discover any important relationships or patterns that exist in the data, and understand how they impact loan repayment by clients. We will work to begin preliminary identification of potential predictors of clients loan repayment ability, and set the foundation for our analysis.  
+
+
+## Data Overview
+
+```{r data overview train application data}
+# Basic data overview
+
+# what does the data frame look like?
+head(app_train)
+
+# Data Structure
+str(app_train)
+
+# Data Summary
+summary(app_train)
+
+dim(app_train)
+```
+
+The data set on current applicants split into the train group consists of 307,511 observations across 123 variables.
+
+The problem here is binary classification, where we want to predict 1 (if we think our applicant is a defaulter), and 0 (if we think our applicant is not a defaulter). 
+
+In thinking about our models performance we will likely want to avoid miss-classifications if possible as it will be a costly mistake. 
+
+
+## Missing Data
+
+Now we will begin to identify where we have missing instances of data in the data set.
+
+
+```{r find missing data in the application train dataset}
+
+# locate only columns with missing values
+
+missing_values <- colSums(is.na(app_train))
+
+missing_values <- missing_values[missing_values > 0]
+
+
+# reformat for percentage of missing data
+
+missing_data_summary <- tibble(
+  Variable = names(missing_values),               
+  MissingCount = as.numeric(missing_values),      
+  MissingPercentage = (as.numeric(missing_values) / nrow(app_train)) * 100  
+)
+
+missing_data_summary <- missing_data_summary |>
+  arrange(desc(MissingPercentage))
+
+# display the summary table
+
+kable(missing_data_summary)
+```
+
+Here we can see that there is a ton of missing data, 38 of our 123 variables have over 50% of the data missing. The top few variables with missing data include, the Age of the client's car,EXT_SOURCE_1(Normalized score from an external data source), information about the building where the client lives (APARTMENTS_AVG, APARTMENTS_MODE, APARTMENTS_MEDI), information about the basement size of the clients building(BASEMENTAREA_AVG, BASEMENTAREA_MODE, BASEMENTAREA_MEDI), information on the buildings use (YEARS_BEGINEXPLUATATION_AVG, YEARS_BEGINEXPLUATATION_MODE, YEARS_BEGINEXPLUATATION_MEDI), data on the construction dates of the building (YEARS_BUILD_AVG, YEARS_BUILD_MODE, YEARS_BUILD_MEDI), and more. We will need to determine with more than 50% of the data missing, whether or not we drop the variables completely  or impute using the data that we have. If the variables are not very valuable to our model it is likely we will see better success with dropping them. Further in our analysis we will confront these data issues as we learn more about the relationships that exist in the data set.  
+
+Notes:
+    
+  When we drop the data numeric data should be imputed with the median, or with KNN/regression if there's a lot of missing data.
+  For categorical variables we should use the mode for imputation. 
+
+
+### Dealing with missing variables continued: less than 5% missing data
+
+Some of our variables had 5% or less missing data, we can address those now by imputing using the median.
+
+The following variables : OBS_30_CNT_SOCIAL_CIRCLE, DEF_30_CNT_SOCIAL_CIRCLE, OBS_60_CNT_SOCIAL_CIRCLE, DEF_60_CNT_SOCIAL_CIRCLE, are measuring the number of people in the social circle of a client who have overdue loan payments. 
+
+DAYS_LAST_PHONE_CHANGE measures the number of days since the client's last phone change.
+
+AMT_ANNUITY, AMT_GOODS_PRICE are measures on the loan,the period payment amount and amount that the client is using the loan to purchase
+
+CNT_FAM_MEMBERS measures the number of family members for the client. 
+
+EXT_SOURCE_2 is an external normalized credit score (provided by a third party)
+
+As these variables are all continuous we will go ahead and use the median to impute the missing data and continue the analysis. Further, we will want to store the calculated median values to be used in the testing data imputation. 
+
+
+```{r impute missing data on the train set for variables with less than 5% missing}
+
+# using the median to fill in some missing data from low missing data columns:(less than 5 % missing data)
+
+low_missing <- c('AMT_ANNUITY', 'AMT_GOODS_PRICE', 'CNT_FAM_MEMBERS', 
+                      'DAYS_LAST_PHONE_CHANGE', 'EXT_SOURCE_2', 
+                      'OBS_30_CNT_SOCIAL_CIRCLE', 'DEF_30_CNT_SOCIAL_CIRCLE',
+                      'OBS_60_CNT_SOCIAL_CIRCLE', 'DEF_60_CNT_SOCIAL_CIRCLE')
+
+median_values <- list()
+
+# use a loop to store the median value of a variable and replace the missing data with that median
+
+for (var in low_missing) {
+  median_value <- median(app_train[[var]], na.rm = TRUE)
+  median_values[[var]] <- median_value
+  app_train[[var]][is.na(app_train[[var]])] <- median_value
+}
+
+for (var in low_missing) {
+  app_train[[var]][is.na(app_train[[var]])] <- median_values[[var]]
+}
+
+for (var in low_missing) {
+  app_test[[var]][is.na(app_test[[var]])] <- median_values[[var]]
+}
+
+
+print(median_values)
+```
+
+We have solved the missing data issues for the variables with less than 5% of missing data, however after further analysis we will have to return to the variables with a large amount of missing data, and ensure we apply the same transformations to the testing data. 
+
+
+Before we begin some visualizations lets reformat age in the train and test data to make sure that it is in years instead of days for better understanding.
+
+```{r fix age}
+
+app_train$Age_in_Years <- -app_train$DAYS_BIRTH / 365
+app_test$Age_in_Years <- -app_test$DAYS_BIRTH / 365
+
+app_train <- app_train %>% select(-DAYS_BIRTH)
+app_test <- app_test %>% select(-DAYS_BIRTH)
+
+```
+
+
+Lets begin looking at some plots to visualize the skewedness  and distribution of the data. We will plot a histogram for each numeric variable to get a sense of what kind of data normalization will be needed before we can begin modeling. 
+
+```{r distribution of numeric train data}
+
+# for loop for all numeric variables in the training data
+
+plot_histograms <- function(app_train, numeric_vars) {
+  for (var in numeric_vars) {
+    print(ggplot(app_train, aes_string(x = var)) +
+            geom_histogram(fill = "lightblue", color = "black", bins = 30) +
+            labs(title = paste("Histogram of", var), x = var, y = "Count") +
+            theme_minimal())
+  }
+}
+
+numeric_vars <- app_train %>% select_if(is.numeric) %>% names()
+
+plot_histograms(app_train, numeric_vars)
+
+```
+
+Looking at these models there are a few that seem fairly normally distributed, Age and Hour_Appr_Process_Start. There is some left skewed data: days last phone change, years build med, years build mode and more, as well as some right skewed data. We will want to decide if these need to be normalized or dropped before we begin our modeling. 
+
+
+
+Now we will perform the same thing for the testing data, but there should not be much of a difference between the two. 
+
+```{r distribution for numeric data in the test set}
+
+# for loop for all numeric variables in the testing data
+
+plot_histograms <- function(app_test, numeric_vars) {
+  for (var in numeric_vars) {
+    print(ggplot(app_test, aes_string(x = var)) +
+            geom_histogram(fill = "brown", color = "black", bins = 30) +
+            labs(title = paste("Histogram of", var), x = var, y = "Count") +
+            theme_minimal())
+  }
+}
+
+numeric_vars <- app_test %>% select_if(is.numeric) %>% names()
+
+plot_histograms(app_test, numeric_vars)
+
+```
+
+
+
+## Data Exploration
+
+### Distribution of Target Variable
+
+Now we will begin investigation into the distribution of the target variable in the data.
+
+```{r target vatiable distribtion}
+
+target_distribution <- app_train |>
+  group_by(TARGET) |>
+  summarise(Count = n()) |>
+  mutate(Proportion = Count / sum(Count))
+
+
+kable(target_distribution, 
+      caption = "Distribution of the Target Variable",
+      col.names = c("Target", "Count", "Proportion"))
+
+
+# plot the distribution of the target variable
+ggplot(app_train, aes(x = factor(TARGET))) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Distribution of the Target Variable", x = "TARGET", y = "Count") +
+  theme_minimal()
+```
+
+Our data is very imbalanced in regards to the target variable, this will impact our analysis and performance grading of the model. Here the majority class is no loan defaults with a proportion of 91.92%, our models will have to perform better than that in order to beat a majority class model. 
+
+
+
+### Random Forest Feature Importance:
+
+Random forest can handle missing data and non linear relationships so its a good place to start in EDA if our data is not very clean. Here we can use it to get a sense of the more important variables.  
+
+```{r feature importance with random forest}
+# factorize target variable
+
+app_train$TARGET <- as.factor(app_train$TARGET)
+
+# simple imputation of missing data for random forest 
+
+train_df_imputed <- app_train
+for (var in names(train_df_imputed)) {
+  if (is.numeric(train_df_imputed[[var]])) {
+    train_df_imputed[[var]][is.na(train_df_imputed[[var]])] <- median(train_df_imputed[[var]], na.rm = TRUE)
+  }
+}
+
+# random forest model
+
+rf_model <- randomForest(TARGET ~ ., data = train_df_imputed, importance = TRUE, ntree = 50)
+
+# order the importance from highest to lowest
+
+importance_df <- as.data.frame(importance(rf_model))
+importance_df <- importance_df[order(-importance_df$MeanDecreaseGini), ]
+print(importance_df)
+```
+
+We can see that EXT_SOURCE_2 and EXT_SOURCE_3 have the highest values in both MeanDecreaseAccuracy and MeanDecreaseGini, which means these features are likely the most important predictors of our target variable, and should be included in our model. The age feature was also a strong predictor, as well as days employed and the feature for loan annuity amounts. 
+
+We also see variables with negative values, which indicate performance may improve if we remove them: DAYS_ID_PUBLISH and DAYS_REGISTRATION 
+
+We can now focus a bit of the EDA to the more important features, as well as ensure they are not dropped from the data set when we clean the remaining  missing values.
+
+Notes:
+    MeanDecreaseAccuracy: measures how much the accuracy of the model decreases when the feature is removed. The higher this value, the more important the feature is for making predictions.
+    MeanDecreaseGini: measures how much each feature decreases the Gini impurity (or increases the purity) in the tree nodes. The Gini impurity is a measure of how well the feature splits the data into classes.
+Higher values indicate that the feature plays a significant role in creating pure (homogeneous) nodes, making it important for classification.
+
+### Correlation Values:
+
+Using a correlation matrix to understand the correlation of the numeric data to the Target variable, to again determine any standout important features. 
+
+```{r correlations in the train data}
+app_train$TARGET <- as.numeric(as.character(app_train$TARGET))
+
+# numeric features only for correlation
+numeric_features <- app_train |>
+  select_if(is.numeric)
+
+correlations_with_target <- sapply(numeric_features, function(x) cor(x, app_train$TARGET, use = "complete.obs"))
+sorted_correlations <- sort(abs(correlations_with_target), decreasing = TRUE)
+print(sorted_correlations)
+```
+Some high performers in terms of correlation, which indicates they could be important predictors or also present issues with multi-colinearity: EXT_SOURCE_3, EXT_SOURCE_2, EXT_SOURCE_1.
+
+
+### Plot Standout Features
+
+We will now utilize plots to visualize the relationship between some of the standout features and the target variable. 
+Loan Default Prevalence: External Source 2 
+
+```{r plots for the train data 1}
+# boxplot EXT_SOURCE_1 grouped by TARGET 
+
+ggplot(app_train, aes(x = as.factor(TARGET), y = EXT_SOURCE_1)) +
+  geom_boxplot(fill = c("coral", "skyblue")) +
+  labs(title = "Loan Default Prevelance: External Source 1", x = "Loan Default", y = "EXT_SOURCE_1") +
+  theme_minimal()
+
+# boxplot EXT_SOURCE_2 grouped by TARGET 
+
+ggplot(app_train, aes(x = as.factor(TARGET), y = EXT_SOURCE_2)) +
+  geom_boxplot(fill = c("coral", "skyblue")) +
+  labs(title = "Loan Default Prevelance: External Source 2", x = "Loan Default", y = "EXT_SOURCE_2") +
+  theme_minimal()
+
+# boxplot EXT_SOURCE_3 grouped by TARGET 
+ggplot(app_train, aes(x = as.factor(TARGET), y = EXT_SOURCE_3)) +
+  geom_boxplot(fill = c("coral", "skyblue")) +
+  labs(title = "Loan Default Prevelance: External Source 3", x = "Loan Default", y = "EXT_SOURCE_3") +
+  theme_minimal()
+
+
+```
+We see higher instances of no loan defaults across all three external source scores, keep in mind however our data is unevenly distributed in terms of the loan default target. The comparison across these three plots do indicate the scores are similar from all three external sources, this could indicate that including all three could cause issues with multicolinery in the model. 
+
+
+Lets look at another important feature, the age of the client.
+
+```{r plots for the train data 2}
+
+# Analyze the distribution of age in years
+
+ggplot(app_train, aes(x = Age_in_Years, fill = as.factor(TARGET))) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  labs(title = "Age Distribution by Loan Defaulting", x = "Age (Years)", y = "Count") +
+  theme_minimal()
+
+```
+This plot again highlights the dramatic difference in distribution of data on the target variable. 
+
+
+Lets continue to look further at some of the more important features. 
+
+```{r plots for the train data 3}
+
+ggplot(app_train, aes(x = AMT_ANNUITY, fill = as.factor(TARGET))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of AMT_ANNUITY by Loan Default", x = "AMT_ANNUITY", y = "Density") +
+  scale_fill_manual(values = c("slategrey", "khaki"), name = "Loan Default") +
+  theme_minimal()
+
+```
+This plot shows that Amt_Annuity is fairly evenly distributed across the default status of individuals, however it is right skewed and may need to be normalized through log transformations to improve the model. Amt Annuity is the periodic payment amount the client makes over time to repay their loan (includes both the principal and interest).
+
+
+```{r plots for the train data 4}
+ggplot(app_train, aes(x = EXT_SOURCE_2, y = EXT_SOURCE_3, color = as.factor(TARGET))) +
+  geom_point(alpha = 0.5) +
+  labs(title = "EXT_SOURCE_2 vs EXT_SOURCE_3 by Loan Default Status", x = "EXT_SOURCE_2", y = "EXT_SOURCE_3") +
+  scale_color_manual(values = c("red", "green"), name = "Loan Default") +
+  theme_minimal()
+```
+This proves to be a not very useful plot, however it does indicate that there isn't an obvious distinction between the two groups which is helpful to know, again this plot indicates that including both of these variables in the modeling may impact the results due to issues with multicollinetty. 
+
+
+```{r plots for the train data 5}
+ggplot(app_train, aes(x = NAME_CONTRACT_TYPE, fill = as.factor(TARGET))) +
+  geom_bar(position = "stack") +
+  labs(title = "Distribution of Loan Default by Contract Type", x = "Contract Type", y = "Count") +
+  scale_fill_manual(values = c("blue", "orange"), name = "Loan Default") +
+  theme_minimal()
+
+# proportion plot to see the relationship better
+
+ggplot(app_train, aes(x = NAME_CONTRACT_TYPE, fill = as.factor(TARGET))) +
+  geom_bar(position = "fill") + 
+  labs(title = "Proportion of Loan Default by Contract Type", x = "Contract Type", y = "Proportion") +
+  scale_fill_manual(values = c("blue", "orange"), name = "Loan Default") +
+  theme_minimal()
+```
+These plots indicate a higher instance of cash loans compared to revolving loans for those who default on the loans, again this plot shows how the poor distribution of the target variable can impact our model. 
+
+
+```{rplots for the train data 6}
+ggplot(app_train, aes(x = CODE_GENDER, fill = as.factor(TARGET))) +
+  geom_bar(position = "stack") +
+  labs(title = "Distribution Gender on Loan Default", x = "Gender", y = "Count") +
+  scale_fill_manual(values = c("lightblue", "lightgreen"), name = "Loan Default") +
+  theme_minimal()
+
+ggplot(app_train, aes(x = CODE_GENDER, fill = as.factor(TARGET))) +
+  geom_bar(position = "fill") +
+  labs(title = "Distribution Gender on Loan Default", x = "Gender", y = "Count") +
+  scale_fill_manual(values = c("lightblue", "lightgreen"), name = "Loan Default") +
+  theme_minimal()
+
+```
+We can see there is a higher proportion of females in the data, when we look at the proportions we see that more Males tend to default than Females. 
+
+
+# Prior Application Data:
+
+The Prior Application data set contains information on the client's past loan applications. Each row represents one prior loan application (SK_ID_PREV), unlike the main training data set (app_train), where each row corresponds to the current loan application (SK_ID_CURR).
+
+This data includes details such as loan type, amount, and contract status. Since clients can have multiple previous loans, the data provides a historical view of their financial behavior. By aggregating and combining this information with the current loan data, we can improve predictions of whether a client will default on a new loan.
+
+## Overview of data
+
+```{r prior app overview}
+str(prior_app)
+
+head(prior_app)
+```
+
+
+## Missing Data on Prior Application
+
+```{r summary of prior app}
+# Get a summary of the data set
+
+# Recalculate the missing values for each column
+missing_values_prior <- colSums(is.na(prior_app))
+
+# Filter to include only the columns with missing values
+missing_values_prior <- missing_values_prior[missing_values_prior > 0]
+
+# Create the missing data summary using tibble
+missing_data_summary_prior <- tibble(
+  Variable = names(missing_values_prior),               # Column names
+  MissingCount = as.numeric(missing_values_prior),      # Number of missing values
+  MissingPercentage = (as.numeric(missing_values_prior) / nrow(prior_app)) * 100  # Percentage of missing values
+)
+
+missing_data_summary_prior <- missing_data_summary_prior |>
+  arrange(desc(MissingPercentage))
+
+# Display the top entries of the summary table
+
+kable(missing_data_summary_prior)
+```
+
+Also a lot of missing data here, we should really consider dropping the variables with basically no data. 
+
+
+## Data Exploration:  Prior Application
+
+View the distribution for all the numeric variables:
+
+```{r EDA prior app}
+# histograms for all numeric variables
+
+plot_histograms <- function(prior_app, numeric_vars) {
+  for (var in numeric_vars) {
+    print(ggplot(prior_app, aes_string(x = var)) +
+            geom_histogram(fill = "pink", color = "black", bins = 30) +
+            labs(title = paste("Histogram of", var), x = var, y = "Count") +
+            theme_minimal())
+  }
+}
+
+numeric_vars <- prior_app|> 
+  select_if(is.numeric) |>
+  names()
+
+# Plot histograms
+
+plot_histograms(prior_app, numeric_vars)
+```
+
+
+## Joing prior application data to the train dataset.
+
+Joining with SK_ID_CURR, but aggregating to make sure we collapse the prior application data as it contains multiple rows for each client, one for every past loan application, we need it to match the granularity of the training data
+
+```{r join prior app and train}
+
+# aggregating prior_app to one row per SK_ID_CURR
+
+prior_app_aggregated <- prior_app %>%
+  group_by(SK_ID_CURR) %>%
+  summarize(
+    n_previous_apps = n(),  # Number of previous applications per SK_ID_CURR
+    avg_amt_annuity = mean(AMT_ANNUITY, na.rm = TRUE),  # Average annuity across previous apps
+    max_amt_credit = max(AMT_CREDIT, na.rm = TRUE),  # Maximum credit amount across previous apps
+    avg_days_decision = mean(DAYS_DECISION, na.rm = TRUE)  # Average days decision across previous apps
+  )
+
+str(prior_app_aggregated)
+
+```
+
+In the example:
+
+n_previous_apps: Counts how many previous applications exist for each SK_ID_CURR.
+avg_amt_annuity: Computes the average annuity amount for previous applications.
+max_amt_credit: Finds the maximum credit amount across previous applications.
+avg_days_decision: Calculates the average number of days before the decision was made on the applications.
+You can customize these aggregation functions depending on which features from prior_app are most relevant to your analysis.
+
+
+```{r join data}
+# join the data sets
+
+app_train_merged <- app_train %>%
+  left_join(prior_app_aggregated, by = "SK_ID_CURR")
+
+# verify merge
+#str(app_train_merged)
+```
+
+Notes:
+  left_join:  ensures that all rows from app_train are retained, and the matching rows from prior_app_aggregated are added. If a particular SK_ID_CURR has no corresponding SK_ID_PREV in prior_app, the new columns will have NA values.
+  
+## Data Exploration: Joined Data
+
+Lets take a look at some brief exploration on the new data we added to the original data set. 
+```{r EDA joined data}
+
+summary(app_train_merged[, c("n_previous_apps", "avg_amt_annuity", "max_amt_credit", "avg_days_decision")])
+
+```
+
+
+```{r}
+
+ggplot(app_train_merged, aes(x = n_previous_apps)) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 30) +
+  labs(title = "Distribution of Number of Previous Applications", x = "Number of Previous Applications", y = "Count")
+
+```
+Right skewed data that may need to be log transformed. 
+
+
+```{r plots joined data 1}
+
+ggplot(app_train_merged, aes(x = avg_amt_annuity)) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 30) +
+  labs(title = "Distribution of Average Annuity", x = "Average Annuity", y = "Count")
+
+```
+Also right skewed, may want to log transform for future analysis.
+
+
+```{rplots joined data 2}
+
+ggplot(app_train_merged, aes(x = as.factor(TARGET), y = n_previous_apps)) +
+  geom_boxplot(fill = c("red", "green")) +
+  labs(title = "Number of Previous Applications by Loan Default Status", x = "Loan Default", y = "Number of Previous Applications")
+
+ggplot(app_train_merged, aes(x = as.factor(TARGET), y = n_previous_apps, fill = as.factor(TARGET))) +
+  stat_summary(fun = "mean", geom = "bar") +
+  labs(title = "Average Number of Previous Applications by Loan Default Status", x = "Loan Default", y = "Average Number of Previous Applications") 
+  theme_minimal()
+
+```
+These two plots show that the number of previous applications does not vary much in terms of the groups with loan defaults and not, again this could be due to the poor distribution of the target variable, and could be hiding a true relationship between the number of prior applications and loan default. We may want to re sample and add more data in to improve the target variable distribution. 
+
+```{r plots joined data 3}
+
+ggplot(app_train_merged, aes(x = avg_amt_annuity, fill = as.factor(TARGET))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Average Annuity Density by Loan Default Status", x = "Average Annuity", y = "Density") +
+  scale_fill_manual(values = c("lightblue", "grey"), name = "Loan Default")
+
+# Plot indicates log transformation may be beneficial. 
+
+app_train_merged$log_avg_amt_annuity <- log1p(app_train_merged$avg_amt_annuity)
+
+ggplot(app_train_merged, aes(x = log_avg_amt_annuity, fill = as.factor(TARGET))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "(Log-Transformed) Average Annuity Density by Loan Default Status", 
+       x = "Log(Average Annuity)", y = "Density") +
+  scale_fill_manual(values = c("lightblue", "grey"), name = "Loan Default") +
+  theme_minimal()
+
+```
+The density is not really separated in the two groups, so annuity may not be a strong predictor, even after a log transformation. 
+
+```{rplots joined data 4}
+
+cor(app_train_merged[, c("n_previous_apps", "avg_amt_annuity", "max_amt_credit", "avg_days_decision")], app_train_merged$TARGET, use = "complete.obs")
+
+```
+The new variables don't show super high correlations with the target, and we are not seeing identification of strong linear relationships 
+
+
+Further EDA should consist of some random forest feature importance on the new joined data set. 
+

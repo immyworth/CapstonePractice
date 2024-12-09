@@ -53,8 +53,8 @@ The solution provides clear business value by:
 While working on this project, we encountered several challenges, including:
 - **Handling Missing Data**: Many features in the dataset had missing values, and we had to carefully decide on imputation strategies, as well as understand the effect of removing features due to missingness. 
 - **Feature Selection**: With hundreds of features available, it was difficult to select the most predictive features for the model.
-- **Imbalanced Classes**: The dataset was significantly imbalanced, with far fewer defaults than non-defaults. This made it very difficult for our model to learn who would be likley to default, we were able to address this issue by upsampling the data to give the model more familiarity with the defaulters.  
-- **Hyperparameter Tuning**: Finding the right hyperparameters for models like Random Forest and XGBoost required significant time and computational resources. In order to tune for the best parameter I had started with a cross-validation approach, this turned out to be highly computationally expensive and took a very long time to run - and I was never able to achive an output. In order to address this we utilized Random Search over 20 combinations to limit the scope of the search and reduce run time.
+- **Imbalanced Classes**: The dataset was significantly imbalanced, with far fewer defaults than non-defaults. This made it very difficult for our model to learn who would be likely to default, we were able to address this issue by upsampling the data to give the model more familiarity with the defaulters.  
+- **Hyperparameter Tuning**: Finding the right hyperparameters for models like Random Forest and XGBoost required significant time and computational resources. In order to tune for the best parameter I had started with a cross-validation approach, this turned out to be highly computationally expensive and took a very long time to run - and I was never able to achieve an output. In order to address this we utilized Random Search over 20 combinations to limit the scope of the search and reduce run time.
 - **Quantifying Impact**: We struggled to explain and quantify the impact to HomeCredit. In our presentation our group did not explain the impact that this would have in a business context, I think we could have worked better to understand the costs associated with a client defaulting, and how early identification of risky applicants would improve HomeCredits business. 
 ---
 
@@ -65,19 +65,19 @@ Through this project, I learned several key lessons, including:
 - **Data Imbalance Techniques**: How to handle imbalanced datasets using upsampling, downsampling, and threshold adjustments.
 - **Robust Reporting**: I learned how to prepare clear, reproducible reports using RMarkdown with proper comments, clear headings, and well-labeled visualizations.
 - **Collaboration**: Collaborating with a team requires strong communication, the ability to share work (GitHub), communication of key findings, as well as how to combine individual coding efforts into a succinct group portfolio.
-- **Time Management**: Another important aspect I learned throughout this project was how I should schedule my time in order to break out computationally expensive and complicated tasks, this gave me a really good understanding for what is expected next semester. 
+- **Time Management**: Another important aspect I learned throughout this project was how I should schedule my time to break out computationally expensive and complicated tasks, this gave me a really good understanding of what is expected next semester. 
 ---
 
 ## **7. Project Files**
 Here is a brief explanation of the project files in this repository:
 This README document explains my project process and outcomes.
 CapstonePractice documents my individual EDA process
-The Modeling Updates Capstone -Imogen Version file was my controbution to the improved modeling that we worked in between the submission of the modeling assingment and the presentation. 
+The Modeling Updates Capstone -Imogen Version file was my contribution to the improved modeling that we worked on between the submission of the modeling assignment and the presentation. 
 Modeling_Assignment (2) file is the group submission to Canvas for the modeling assignment. 
 
 
 ## Visualization Highlights
-I included some stand out visualizations that I developed for the presentation. 
+Below are some stand-out visualizations that I developed for the presentation:
 ![D5E0BC9F-0444-48AE-96FD-E49DE723E8E6_1_105_c](https://github.com/user-attachments/assets/30f8f7d7-aecd-43d9-a620-ffe2f4f44af8)
 ![89D5ECCE-DC55-48F0-B12F-32CC4092F96D_1_105_c](https://github.com/user-attachments/assets/4cdf63c7-cf6b-46d3-9ffa-bd82726e0a44)
 ![Confusion Matrix Plot Without Gridlines](confusion_matrix_plot_no_gridlines.png)

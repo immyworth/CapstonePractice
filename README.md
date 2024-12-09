@@ -1,7 +1,6 @@
 # **Capstone Practice Project: Predicting Loan Default Risk HomeCredit**
 
 ## **1. Business Problem and Project Objective**
-
 Home Credit strives to provide a more inclusive banking experience and broaden financial inclusion for the unbanked population.  To provide this experience Home Credit must be able to accurately assess the risk of default by customers, the majority of which have limited or no formal credit history. Home Credit wants to further the inclusivity of its lending by reducing the risk of lending to potentially high-risk clients while maintaining accessibility, accurately predicting the default risk of clients is crucial to maintaining its mission. 
 
 This project aims to unlock the full potential of Home Credit’s client data to give loans with a principal, maturity, and repayment calendar that will empower their clients to be successful.
@@ -14,34 +13,38 @@ Create a predictive model that classifies loan applicants as likely to default o
 ## **2. Our Solution**
 To solve the business problem, we implemented an iterative machine-learning process with the following steps. 
 1. **Data Cleaning and Preprocessing**:
-We handled missing data, removed outliers, and selected the most relevant features for prediction. Standouts from this process were that 45 variables were missing over 48% of their data, there were outliers such as really large families and very high-income earners, and there were what seemed to be data entry issues, where some values had to be removed as they were nonsensical. We also spent some time working with the external source vairables for thier missing vlaue imputation, we engineered binary indicators for missiness across all three external sources as well as a indicator for those missing a value across all three external source values. Other engineered terms that were of importance, were the simple debt to income ratio using the individusal income and credit, as well as credit duration which was made up from the credit and annuity values. 
+We handled missing data, removed outliers, and selected the most relevant features for prediction. Standouts from this process were that 45 variables were missing over 48% of their data, there were outliers such as large families and very high-income earners, and there were what seemed to be data entry issues, where some values had to be removed as they were nonsensical. We also spent some time working with the external source variables for their missing value imputation, we engineered binary indicators for missingness across all three external sources and an indicator for those missing a value across all three external source values. Other important engineered terms were the simple debt-to-income ratio using the individual income and credit, as well as credit duration made up from the credit and annuity values.
+
 4. **Exploratory Data Analysis (EDA)**:
-The exploratoty data analysis process involved visualizing key relationshispin the data to better understand which variables impact the likelihood of default. As well as examinign the impact of the signficnat class imabalance that existed.
+The exploratory data analysis process involved visualizing key relationships in the data to better understand which variables impact the likelihood of default. As well as examining the impact of the significant class imbalance that existed.
 6. **Model Development**:
-We worked through an iterative process in modeling, starting with baseline peromrace measured with a simple logisitc regression model
- Random Forest, XGBoost, and Support Vector Machines (SVM).
+We worked through an iterative process in modeling, starting with baseline performance measured with a simple logistic regression model, here we were able to understand the effect the class imbalance had on our model training and selection process. After establishing a majority classifier model, we worked with a logistic model with some features found to be important, as well as including the engineered terms to determine their importance. This model still had issues identifying the defaulters in the data set, so we then moved to a random forest model which improved in performance. After the RF model, we worked on improving some XGBoost models, with tuned hyperparameters and upsampled training data to expand our model's familiarity with the minority class of defaulters. 
+
 8. **Model Evaluation**:
-We evaluated models using precision, recall, and AUC-ROC to ensure a balance between avoiding defaults and approving as many loans as possible.
-9. **Implementation**:
-The best-performing model was selected for use in predicting applicant default risk.
+We evaluated models using precision, recall, and AUC-ROC to ensure a balance between avoiding defaults and approving as many loans as possible. Our best-performing model had a high AUC and high recall, however, some models had a higher AUC but did not have a good recall rate. This model was also evaluated on the testing data and received a Kaggle score of about 0.74.
+
+10. **Implementation**:
+The best-performing model was the XGBoost model with tuned parameters trained with upsampled data. We recommend that HomeCredit implement this model in order to be able to identify applicants who have a higher risk of defaulting. Implementing this model would allow HomeCredit to identify 50% more of their applicants who are at risk of defaulting, which would save the company time and money on risky applicants. 
 
 ---
 
 ## **3. My Contribution**
 My specific contributions to the project included:
-- **Data Wrangling**: I cleaned and preprocessed the raw data, handling missing values, outliers, and categorical variables.
-- **Feature Engineering**: I created new features and selected the most relevant predictors for model training.
-- **Model Development and Tuning**: I built models using Logistic Regression, Random Forest, and XGBoost. I also fine-tuned hyperparameters to optimize model performance.
-- **Evaluation and Insights**: I evaluated models using performance metrics (precision, recall, AUC-ROC) and selected the best-performing model.
-- **Report and Documentation**: I prepared this README and ensured that the RMarkdown files followed best practices, with proper commenting, labeled visualizations, and clear interpretation of results.
+- **Data Wrangling**: I worked on my own EDA assignment to explore variable relationships and examine the missing data. For the group work, I assisted with the clean-up of the data as well as the imputation of missing values.  
+- **Feature Engineering**: I worked to create new values to indicate missing values for the External Credit scores, so that their missing-ness was utilized but also allowed for us to impute the missing values on the external source values. Other variables that were created to examine the nonlinear relationships were a simple debt-to-income value, calculated from an applicant's credit and income, as well as a credit duration rate which was the individual's credit over their annuity, which helped capture the expected payment timeline. 
+- **Model Development and Tuning**: I worked on developing a baseline XGBoost model, then used random search to find the best hyperparameters that improved the model's AUC and recall, and finally worked with upsampling the training data and training a new model on the upsampled data. The upsampling process involved working with both upSample as well as scale_pos_weight, with upSampling resulting in the best-trained model. 
+- 
+- **Evaluation and Insights**: I evaluated the models between their AUC and recall performance, as well as deployed the best model (XGBoost upsampled with tuned parameters) on the Kaggle data to determine the Kaggle score. I also developed various visualizations to better understand the improvement and change in performance over the models.
+- 
+- **Report and Documentation**: I worked to develop visualizations for the presentation portion of the assignment in order to explain our modeling process and the impact it would have for HomeCredit. 
 
 ---
 
 ## **4. Business Value of the Solution**
 The solution provides clear business value by:
-- **Reducing Risk**: The model predicts which applicants are likely to default, allowing the lender to make more informed decisions.
-- **Increasing Efficiency**: Automating the risk assessment process reduces manual review time for loan applications.
-- **Promoting Financial Inclusion**: By accurately identifying creditworthy applicants, the institution can approve more loans while reducing the risk of default.
+- **Reducing Risk**: The model better predicts which applicants are likely to default, allowing the lender to make more informed decisions.
+- **Increasing Efficiency**: Automating the risk assessment process reduces manual review time for loan applications, and would allo HomeCredit to approve more applicants faster and with increased confidence. 
+- **Promote Financial Inclusion**: By accurately identifying creditworthy applicants, the institution can approve more loans while reducing the risk of default.
 - **Cost Savings**: Early identification of high-risk applicants reduces the cost of delinquency and default.
 
 ---
@@ -67,6 +70,8 @@ Through this project, I learned several key lessons, including:
 
 ## **7. Project Files**
 Here is a brief explanation of the project files in this repository:
+
+
 
 
 

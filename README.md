@@ -80,6 +80,7 @@ Modeling_Assignment (2) file is the group submission to Canvas for the modeling 
 Below are some stand-out visualizations that I developed for the presentation:
 ![D5E0BC9F-0444-48AE-96FD-E49DE723E8E6_1_105_c](https://github.com/user-attachments/assets/30f8f7d7-aecd-43d9-a620-ffe2f4f44af8)
 ![89D5ECCE-DC55-48F0-B12F-32CC4092F96D_1_105_c](https://github.com/user-attachments/assets/4cdf63c7-cf6b-46d3-9ffa-bd82726e0a44)
-![Confusion Matrix Plot Without Gridlines](confusion_matrix_plot_no_gridlines.png)
+![Confusion Matrix Plot Without Gridlines](https://github.com/immyworth/ImogenHoldsworth/blob/main/confusion_matrix_plot_no_gridlines.png?raw=true)
+
 
 

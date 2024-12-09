@@ -74,6 +74,7 @@ This README document explains my project process and outcomes.
 CapstonePractice documents my individual EDA process
 The Modeling Updates Capstone -Imogen Version file was my contribution to the improved modeling that we worked on between the submission of the modeling assignment and the presentation. 
 Modeling_Assignment (2) file is the group submission to Canvas for the modeling assignment. 
+The Presentation document is also included to reference the slides. 
 
 
 ## Visualization Highlights
